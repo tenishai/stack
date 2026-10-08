@@ -18,12 +18,23 @@ import os
 import sys
 from pathlib import Path
 
-from stack.clients import CblCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
-from stack.model import Stack
-from stack.steps import Clients, Installer, Options
+
+def _shed_pythonpath() -> None:
+    """A PYTHONPATH in the environment puts someone else's site-packages
+    ahead of this venv's (a shared machine that exports one globally shadowed
+    pydantic on the first stranger run, 2026-10-08). Re-exec without it, once."""
+    if os.environ.get("PYTHONPATH") and not os.environ.get("STACK_REEXEC"):
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["STACK_REEXEC"] = "1"
+        os.execve(sys.executable, [sys.executable, "-m", "stack.cli", *sys.argv[1:]], env)
 
 
 def main(argv: list[str] | None = None) -> int:
+    _shed_pythonpath()
+    from stack.clients import CblCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
+    from stack.model import Stack
+    from stack.steps import Clients, Installer, Options
+
     p = argparse.ArgumentParser(prog="stack")
     sub = p.add_subparsers(dest="cmd", required=True)
     for name in ("install", "check"):
