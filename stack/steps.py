@@ -115,8 +115,22 @@ class Installer:
         self.ensure_deployed(app, row)
         self.wait_ready(app)
         if app.bootstrap == "cabal":
-            self.bootstrap_cabal(app)
+            if self.tokens_still_needed(app):
+                self.bootstrap_cabal(app)
+            else:
+                self.report.note(f"{app.name}: no tokens left to mint, bootstrap skipped", self.o.say)
         return row
+
+    def tokens_still_needed(self, cabal_app: App) -> bool:
+        """A rerun on a live stack has every token Secret already; the
+        bootstrap code is printed only at startup, so don't go looking."""
+        after = self.stack.apps[self.stack.apps.index(cabal_app) + 1:]
+        for app in after:
+            for name, keys in app.secrets.items():
+                if any(s.kind == "cabal-token" for s in keys.values()) \
+                        and not self.c.kubectl.secret_exists(app.namespace, name):
+                    return True
+        return False
 
     def apply_cluster_objects(self, app: App) -> None:
         for rel in app.cluster_objects:

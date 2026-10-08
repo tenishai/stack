@@ -156,3 +156,19 @@ def test_the_dogfood_example_drives_the_installer(home, monkeypatch):
     _, report, _ = _run(home, stack, kubectl=kubectl, cabal=FakeCabal(), merge_setup_prs=True)
     assert {ns for ns, _ in kubectl.secrets} == {"litellm", "cabal", "liminal", "kobo"}
     assert any("kobo: 1/1 pods ready" in d for d in report.done)
+
+
+def test_a_rerun_on_a_live_stack_does_not_look_for_a_bootstrap_code(home):
+    """The code is printed only at startup; when every later token Secret
+    already exists there is nothing to mint, so the rerun skips the login."""
+    stack = _stack(home, [
+        {"name": "cabal", "repo": "o/cabal", "bootstrap": "cabal"},
+        {"name": "liminal", "repo": "o/liminal",
+         "secrets": {"liminal-secrets": {"T": "cabal-token:service:liminal:secrets-fetch"}}},
+    ])
+    kubectl = FakeKubectl(log_code=None)
+    kubectl.secrets[("liminal", "liminal-secrets")] = {"T": "old"}
+    cabal = FakeCabal()
+    _, report, _ = _run(home, stack, kubectl=kubectl, cabal=cabal, merge_setup_prs=True)
+    assert cabal.logged_in is None and cabal.minted == []
+    assert "cabal: no tokens left to mint, bootstrap skipped" in report.done
