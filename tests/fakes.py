@@ -1,0 +1,127 @@
+"""Fakes for the four hands, shaped like what the dogfood answered on 2026-10-08."""
+
+from __future__ import annotations
+
+from stack.clients import AppRow, ToolError
+
+
+class FakeGojira:
+    def __init__(self, apps: list[AppRow] | None = None, clusters: list[dict] | None = None):
+        self._apps = {a.id: a for a in (apps or [])}
+        self._clusters = clusters or []
+        self.calls: list[str] = []
+        # what a fresh connect comes back as, by app name (default awaiting_pr with a PR)
+        self.connect_outcome: dict[str, tuple[str, str]] = {}
+        self.sync_outcome: dict[int, str] = {}
+
+    def api_token(self) -> str:
+        return "tok-123"
+
+    def clusters(self):
+        return list(self._clusters)
+
+    def register_cluster(self, name, gcp_project, location, gke_cluster, ar_repo):
+        self.calls.append(f"register:{name}")
+        self._clusters.append({"name": name, "gcp_project": gcp_project, "location": location,
+                               "gke_cluster": gke_cluster, "ar_repo": ar_repo})
+
+    def apps(self):
+        return list(self._apps.values())
+
+    def app(self, app_id):
+        return self._apps[app_id]
+
+    def connect(self, name, repo, workload_class, environment, namespace, auto_merge):
+        self.calls.append(f"connect:{name}:auto={auto_merge}")
+        status, url = self.connect_outcome.get(name, ("awaiting_pr", f"https://github.com/{repo}/pull/1"))
+        row = AppRow(id=len(self._apps) + 1, name=name, status=status, setup_pr_url=url)
+        self._apps[row.id] = row
+        return row
+
+    def provision(self, app_id):
+        self.calls.append(f"provision:{app_id}")
+        self._apps[app_id].status = "active"
+
+    def sync(self, app_id):
+        self.calls.append(f"sync:{app_id}")
+        self._apps[app_id].status = self.sync_outcome.get(app_id, "active")
+        return self._apps[app_id]
+
+
+class FakeKubectl:
+    def __init__(self, ready: dict[str, tuple[int, int]] | None = None, log_code: str = "ABC123"):
+        self.namespaces: set[str] = set()
+        self.secrets: dict[tuple[str, str], dict[str, str]] = {}
+        self.configmaps: dict[tuple[str, str], dict[str, str]] = {}
+        self.applied: list[str] = []
+        self.ready = ready or {}
+        self.log_code = log_code
+        self.calls: list[str] = []
+
+    def namespace_exists(self, ns):
+        return ns in self.namespaces
+
+    def secret_exists(self, ns, name):
+        return (ns, name) in self.secrets
+
+    def secret_value(self, ns, name, key):
+        return self.secrets[(ns, name)][key]
+
+    def apply_secret(self, ns, name, data):
+        self.calls.append(f"secret:{ns}/{name}")
+        self.secrets[(ns, name)] = dict(data)
+
+    def configmap_exists(self, ns, name):
+        return (ns, name) in self.configmaps
+
+    def apply_configmap(self, ns, name, data):
+        self.calls.append(f"configmap:{ns}/{name}")
+        self.configmaps[(ns, name)] = dict(data)
+
+    def apply_file(self, path):
+        self.applied.append(path)
+        return "clusterrole.rbac.authorization.k8s.io/x created"
+
+    def pods_ready(self, ns):
+        return self.ready.get(ns, (1, 1))
+
+    def logs_grep(self, ns, deploy, pattern):
+        return self.log_code
+
+    def port_forward(self, ns, target, local, remote):
+        raise AssertionError("fakes never port-forward")
+
+
+class FakeGitHub:
+    def __init__(self, states: dict[str, str] | None = None, runs: dict[str, tuple[str, str]] | None = None):
+        self.states = states or {}
+        self.runs = runs or {}
+        self.calls: list[str] = []
+
+    def pr_state(self, pr_url):
+        return self.states.get(pr_url, "open")
+
+    def merge_pr(self, pr_url):
+        self.calls.append(f"merge:{pr_url}")
+        self.states[pr_url] = "merged"
+
+    def dispatch(self, repo, workflow):
+        self.calls.append(f"dispatch:{repo}:{workflow}")
+
+    def last_run(self, repo, workflow):
+        return self.runs.get(repo, ("completed", "success"))
+
+
+class FakeCabal:
+    def __init__(self):
+        self.logged_in: str | None = None
+        self.minted: list[tuple[str, str, int]] = []
+
+    def login(self, code):
+        if len(code) != 6:
+            raise ToolError("bad code")
+        self.logged_in = code
+
+    def mint(self, sub, scope, ttl_days):
+        self.minted.append((sub, scope, ttl_days))
+        return f"h.{sub.replace(':', '-')}-{scope}.s"

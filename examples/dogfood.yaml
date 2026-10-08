@@ -1,0 +1,50 @@
+# The tenish stack on the dogfood (shaz-learning / gojira-sandbox), as it was
+# brought up by hand on 2026-10-08 and as `stack install` brings it up now.
+#
+# Order matters and is the dependency order: litellm (the model proxy) first,
+# cabal (the switchboard; needs litellm's key) second, then liminal and kobo,
+# whose Secrets hold tokens minted on that cabal. Values name where they come
+# from on the operator's machine; nothing secret is in this file.
+
+gojira:
+  namespace: gojira            # port-forwarded on the current kubectl context
+
+cluster:
+  name: gojira-sandbox
+  gcp_project: shaz-learning
+  location: us-central1
+
+apps:
+  - name: litellm
+    repo: tenishai/litellm
+    secrets:
+      litellm-secrets:
+        LITELLM_MASTER_KEY: file:~/litellm-master-key
+
+  - name: cabal
+    repo: tenishai/cabal
+    bootstrap: cabal           # catch the bootstrap code from its log, log in, mint below
+    configmaps:
+      cabal-config:
+        identity.toml: file:~/src/git/stack/dogfood/cabal-identity.toml
+    secrets:
+      cabal-secrets:
+        CABAL_MASTER_KEY: generate:32
+        LITELLM_MASTER_KEY: file:~/litellm-master-key
+
+  - name: liminal
+    repo: tenishai/liminal
+    secrets:
+      liminal-secrets:
+        LIMINAL_CABAL_TOKEN: cabal-token:service:liminal:secrets-fetch
+
+  - name: kobo
+    repo: tenishai/kobo
+    cluster_objects: [k8s/cluster/rbac.yaml]     # the ClusterRole Gojira binds via cluster_roles
+    secrets:
+      kobo-github:
+        private-key.pem: file:~/tenish-room.pem
+      kobo-config:
+        config.yaml: template:~/src/git/stack/dogfood/kobo-config.template.yaml
+      kobo-cabal:
+        CABAL_OPERATOR_TOKEN: cabal-token:service:kobo:operator
