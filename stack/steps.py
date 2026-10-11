@@ -41,6 +41,7 @@ from stack.model import App, Source, Stack
 log = logging.getLogger("stack")
 
 ACTIVE, AWAITING_PR, FAILED = "active", "awaiting_pr", "failed"
+WORKFLOW = "gojira-ci.yaml"
 BOOTSTRAP_CODE = r"code=([A-Z0-9]{6})"
 
 
@@ -61,6 +62,7 @@ class Options:
     pr_wait_seconds: float = 3600.0
     rollout_seconds: float = 900.0
     bootstrap_seconds: float = 300.0     # cabal's code is good for five minutes
+    iam_settle_seconds: float = 60.0     # a new deploy identity is usable after about this
     token_ttl_days: int = 90
     say: object = print
 
@@ -209,16 +211,43 @@ class Installer:
 
     def ensure_deployed(self, app: App, row: AppRow) -> None:
         """A reconnect that matched the repo comes back active with nothing
-        running (tenishai/gojira#75): dispatch the workflow ourselves."""
-        ready, total = self.c.kubectl.pods_ready(app.namespace)
+        running (tenishai/gojira#75): dispatch the workflow ourselves, and
+        watch it. A deploy identity made seconds ago is not yet usable
+        (Google IAM propagates in about a minute: the first stranger run
+        failed on "unable to acquire impersonated credentials"), so a failed
+        first run is dispatched once more after the settle time."""
+        _, total = self.c.kubectl.pods_ready(app.namespace)
         if total:
             return
-        status, _ = self.c.github.last_run(app.repo, "gojira-ci.yaml")
-        if status in ("queued", "in_progress"):
+        status, _ = self.c.github.last_run(app.repo, WORKFLOW)
+        if status not in ("queued", "in_progress"):
+            self.c.github.dispatch(app.repo, WORKFLOW)
+            self.report.note(f"{app.name}: deploy dispatched (namespace was empty)", self.o.say)
+        else:
             self.report.note(f"{app.name}: deploy already running", self.o.say)
+        if self.wait_run(app) == "success":
             return
-        self.c.github.dispatch(app.repo, "gojira-ci.yaml")
-        self.report.note(f"{app.name}: deploy dispatched (namespace was empty)", self.o.say)
+        self.o.say(f"  {app.name}: the deploy failed; a fresh identity takes about a minute "
+                   f"to be usable, trying once more in {self.o.iam_settle_seconds:.0f}s")
+        time.sleep(self.o.iam_settle_seconds)
+        self.c.github.dispatch(app.repo, WORKFLOW)
+        self.report.note(f"{app.name}: deploy dispatched again", self.o.say)
+        if self.wait_run(app) != "success":
+            raise ToolError(f"{app.name}: the deploy failed twice; read the latest {WORKFLOW} run on "
+                            f"https://github.com/{app.repo}/actions")
+
+    def wait_run(self, app: App) -> str:
+        """The conclusion of the latest workflow run once it completes."""
+        deadline = time.monotonic() + self.o.rollout_seconds
+        time.sleep(min(self.o.poll_seconds, 5))  # the dispatch takes a moment to appear
+        while True:
+            status, conclusion = self.c.github.last_run(app.repo, WORKFLOW)
+            if status == "completed":
+                return conclusion
+            if time.monotonic() > deadline:
+                raise ToolError(f"{app.name}: the deploy is still {status} after "
+                                f"{self.o.rollout_seconds:.0f}s")
+            time.sleep(self.o.poll_seconds)
 
     def wait_ready(self, app: App) -> None:
         deadline = time.monotonic() + self.o.rollout_seconds

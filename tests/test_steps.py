@@ -113,8 +113,10 @@ def test_a_merged_pr_is_synced_and_an_empty_namespace_is_deployed(home):
     github = FakeGitHub(runs={"o/litellm": ("completed", "success")})
 
     # pods appear after the dispatch
+    real = github.dispatch
+
     def dispatch(repo, workflow):
-        github.calls.append(f"dispatch:{repo}:{workflow}")
+        real(repo, workflow)
         kubectl.ready["litellm"] = (1, 1)
     github.dispatch = dispatch
     _, report, _ = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github)
@@ -172,3 +174,37 @@ def test_a_rerun_on_a_live_stack_does_not_look_for_a_bootstrap_code(home):
     _, report, _ = _run(home, stack, kubectl=kubectl, cabal=cabal, merge_setup_prs=True)
     assert cabal.logged_in is None and cabal.minted == []
     assert "cabal: no tokens left to mint, bootstrap skipped" in report.done
+
+
+def test_a_deploy_that_fails_on_a_fresh_identity_is_dispatched_once_more(home):
+    """The first stranger run (2026-10-08): CI four seconds after the
+    identity was made failed on impersonation; the second try, a minute
+    later, is the one that works."""
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["litellm"] = ("active", "")
+    kubectl = FakeKubectl(ready={"litellm": (0, 0)})
+    github = FakeGitHub()
+    github.outcomes["o/litellm"] = ["failure", "success"]
+    real = github.dispatch
+
+    def dispatch(repo, workflow):
+        real(repo, workflow)
+        if github.runs[repo][1] == "success":
+            kubectl.ready["litellm"] = (1, 1)
+    github.dispatch = dispatch
+    _, report, lines = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github, iam_settle_seconds=0)
+    assert github.calls.count("dispatch:o/litellm:gojira-ci.yaml") == 2
+    assert "litellm: deploy dispatched again" in report.done
+    assert any("trying once more" in ln for ln in lines)
+
+
+def test_a_deploy_that_fails_twice_stops_the_run_with_the_run_to_read(home):
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["litellm"] = ("active", "")
+    github = FakeGitHub()
+    github.outcomes["o/litellm"] = ["failure", "failure"]
+    with pytest.raises(ToolError, match="failed twice.*github.com/o/litellm/actions"):
+        _run(home, stack, gojira=gojira, kubectl=FakeKubectl(ready={"litellm": (0, 0)}), github=github,
+             iam_settle_seconds=0)

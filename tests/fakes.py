@@ -96,6 +96,7 @@ class FakeGitHub:
     def __init__(self, states: dict[str, str] | None = None, runs: dict[str, tuple[str, str]] | None = None):
         self.states = states or {}
         self.runs = runs or {}
+        self.outcomes: dict[str, list[str]] = {}
         self.calls: list[str] = []
 
     def pr_state(self, pr_url):
@@ -107,6 +108,9 @@ class FakeGitHub:
 
     def dispatch(self, repo, workflow):
         self.calls.append(f"dispatch:{repo}:{workflow}")
+        # the outcome of each dispatch, in order; default success
+        outcomes = self.outcomes.get(repo, [])
+        self.runs[repo] = ("completed", outcomes.pop(0) if outcomes else "success")
 
     def last_run(self, repo, workflow):
         return self.runs.get(repo, ("completed", "success"))
