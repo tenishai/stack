@@ -124,12 +124,24 @@ def test_a_merged_pr_is_synced_and_an_empty_namespace_is_deployed(home):
     assert "litellm: deploy dispatched (namespace was empty)" in report.done
 
 
-def test_a_failed_provision_stops_the_run_by_name(home):
+def test_a_failed_provision_is_tried_once_more_then_stops_the_run_by_name(home):
+    """Seconds after an install Google is still catching up (a WIF provider
+    the purge soft-deleted, gojira#117): the second provision is the one
+    that works. Two failures are a real failure, and the next app never
+    starts."""
     stack = _stack(home, [{"name": "kobo", "repo": "o/kobo"}, {"name": "after", "repo": "o/after"}])
     gojira = FakeGojira()
     gojira.connect_outcome["kobo"] = ("failed", "")
-    with pytest.raises(ToolError, match="kobo: provision failed"):
-        _run(home, stack, gojira=gojira)
+    gojira.provision_outcomes[1] = ["active"]
+    _, report, _ = _run(home, stack, gojira=gojira, iam_settle_seconds=0, merge_setup_prs=True)
+    assert "kobo: provisioned on the second try" in report.done
+    assert gojira.calls.count("provision:1") == 1
+
+    gojira = FakeGojira()
+    gojira.connect_outcome["kobo"] = ("failed", "")
+    gojira.provision_outcomes[1] = ["failed"]
+    with pytest.raises(ToolError, match="kobo: provision failed twice"):
+        _run(home, stack, gojira=gojira, iam_settle_seconds=0)
     assert not any(c.startswith("connect:after") for c in gojira.calls)
 
 
