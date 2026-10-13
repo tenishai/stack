@@ -16,10 +16,13 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -281,8 +284,13 @@ class CblCLI:
     there); the operator's own ~/.cabal is never touched.
     """
 
-    def __init__(self, cbl: str, url: str, home: str):
-        self._cbl, self._url, self._home = cbl, url, home
+    def __init__(self, cbl: str, url: str, home: str, forward: Callable[[], subprocess.Popen] | None = None):
+        # The port-forward is opened on demand, right before each call, and
+        # reopened if it is gone: it cannot be opened at startup (the Service
+        # does not exist yet on a fresh install) and it dies when the pod it
+        # reached restarts (which the fresh-code step does on purpose).
+        self._cbl, self._url, self._home, self._forward = cbl, url, home, forward
+        self._pf: subprocess.Popen | None = None
         os.makedirs(home, mode=0o700, exist_ok=True)
 
     def _env(self) -> dict[str, str]:
@@ -290,13 +298,42 @@ class CblCLI:
         env.update({"CABAL_HOME": self._home, "CABAL_URL": self._url})
         return env
 
+    def _port_open(self) -> bool:
+        u = urlparse(self._url)
+        try:
+            with socket.create_connection((u.hostname or "127.0.0.1", u.port or 80), timeout=1):
+                return True
+        except OSError:
+            return False
+
+    def ensure_tunnel(self, timeout: float = 60.0) -> None:
+        """A port-forward that answers, opened or reopened as needed."""
+        if self._port_open():
+            return
+        if self._forward is None:
+            raise ToolError(f"nothing answers at {self._url} and no port-forward is configured")
+        if self._pf is not None:
+            self._pf.terminate()
+        self._pf = self._forward()
+        deadline = time.monotonic() + timeout
+        while not self._port_open():
+            if self._pf.poll() is not None or time.monotonic() > deadline:
+                raise ToolError(f"the port-forward to cabal at {self._url} did not come up")
+            time.sleep(1)
+
+    def close(self) -> None:
+        if self._pf is not None:
+            self._pf.terminate()
+
     def login(self, code) -> None:
+        self.ensure_tunnel()
         proc = subprocess.run([self._cbl, "login"], input=code + "\n", capture_output=True, text=True,
                               env=self._env())
         if proc.returncode != 0 or "Logged in" not in proc.stdout + proc.stderr:
             raise ToolError(f"cbl login failed: {(proc.stdout + proc.stderr).strip()[-200:]}")
 
     def mint(self, sub, scope, ttl_days) -> str:
+        self.ensure_tunnel()
         proc = subprocess.run([self._cbl, "token", "mint-service", "--sub", sub, "--scope", scope,
                                "--aud", "cabal-core", "--ttl-days", str(ttl_days)],
                               capture_output=True, text=True, env=self._env())
