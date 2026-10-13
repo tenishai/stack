@@ -220,3 +220,33 @@ def test_a_deploy_that_fails_twice_stops_the_run_with_the_run_to_read(home):
     with pytest.raises(ToolError, match="failed twice.*github.com/o/litellm/actions"):
         _run(home, stack, gojira=gojira, kubectl=FakeKubectl(ready={"litellm": (0, 0)}), github=github,
              iam_settle_seconds=0)
+
+
+def test_an_expired_bootstrap_code_gets_the_pod_restarted_once(home):
+    """A cabal pod up for longer than five minutes holds a dead code (a rerun,
+    or a slow build): the installer tries it, is refused, restarts the
+    deployment and logs in with the fresh one."""
+    stack = _stack(home, [
+        {"name": "cabal", "repo": "o/cabal", "bootstrap": "cabal"},
+        {"name": "liminal", "repo": "o/liminal",
+         "secrets": {"liminal-secrets": {"T": "cabal-token:service:liminal:secrets-fetch"}}},
+    ])
+    kubectl = FakeKubectl(log_code="OLD123")
+    cabal = FakeCabal(expired={"OLD123"})
+    _, report, lines = _run(home, stack, kubectl=kubectl, cabal=cabal, merge_setup_prs=True)
+    assert "restart:cabal/cabal" in kubectl.calls
+    assert cabal.logged_in == "FRESH1"
+    assert "cabal: restarted, operator logged in with the fresh code" in report.done
+    assert any("refused" in ln for ln in lines)
+
+
+def test_no_code_in_the_log_also_restarts(home):
+    stack = _stack(home, [
+        {"name": "cabal", "repo": "o/cabal", "bootstrap": "cabal"},
+        {"name": "liminal", "repo": "o/liminal",
+         "secrets": {"liminal-secrets": {"T": "cabal-token:service:liminal:secrets-fetch"}}},
+    ])
+    kubectl = FakeKubectl(log_code=None)
+    cabal = FakeCabal()
+    _run(home, stack, kubectl=kubectl, cabal=cabal, merge_setup_prs=True)
+    assert "restart:cabal/cabal" in kubectl.calls and cabal.logged_in == "FRESH1"

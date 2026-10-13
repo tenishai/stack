@@ -154,6 +154,7 @@ class KubectlClient(Protocol):
     def apply_file(self, path: str) -> str: ...
     def pods_ready(self, ns: str) -> tuple[int, int]: ...
     def logs_grep(self, ns: str, deploy: str, pattern: str) -> str | None: ...
+    def restart(self, ns: str, deploy: str) -> None: ...
     def port_forward(self, ns: str, target: str, local: int, remote: int) -> subprocess.Popen: ...
 
 
@@ -207,10 +208,14 @@ class KubectlCLI:
         lines = [ln for ln in out.splitlines() if ln.strip()]
         return sum(1 for ln in lines if "false" not in ln), len(lines)
 
-    def logs_grep(self, ns, deploy, pattern) -> str | None:
-        out = self._k("-n", ns, "logs", f"deploy/{deploy}", "--since=10m", check=False)
+    def logs_grep(self, ns, deploy, pattern, since: str = "10m") -> str | None:
+        out = self._k("-n", ns, "logs", f"deploy/{deploy}", f"--since={since}", check=False)
         m = re.search(pattern, out)
         return m.group(1) if m else None
+
+    def restart(self, ns, deploy) -> None:
+        self._k("-n", ns, "rollout", "restart", f"deploy/{deploy}")
+        self._k("-n", ns, "rollout", "status", f"deploy/{deploy}", "--timeout=300s")
 
     def port_forward(self, ns, target, local, remote) -> subprocess.Popen:
         return subprocess.Popen(["kubectl", *self._ctx, "-n", ns, "port-forward", target, f"{local}:{remote}"],

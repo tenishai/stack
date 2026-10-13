@@ -58,6 +58,7 @@ class FakeKubectl:
         self.applied: list[str] = []
         self.ready = ready or {}
         self.log_code = log_code
+        self.code_after_restart = "FRESH1"
         self.calls: list[str] = []
 
     def namespace_exists(self, ns):
@@ -87,8 +88,12 @@ class FakeKubectl:
     def pods_ready(self, ns):
         return self.ready.get(ns, (1, 1))
 
-    def logs_grep(self, ns, deploy, pattern):
+    def logs_grep(self, ns, deploy, pattern, since="10m"):
         return self.log_code
+
+    def restart(self, ns, deploy):
+        self.calls.append(f"restart:{ns}/{deploy}")
+        self.log_code = self.code_after_restart
 
     def port_forward(self, ns, target, local, remote):
         raise AssertionError("fakes never port-forward")
@@ -119,13 +124,16 @@ class FakeGitHub:
 
 
 class FakeCabal:
-    def __init__(self):
+    def __init__(self, expired: set[str] | None = None):
         self.logged_in: str | None = None
         self.minted: list[tuple[str, str, int]] = []
+        self.expired = expired or set()
 
     def login(self, code):
         if len(code) != 6:
             raise ToolError("bad code")
+        if code in self.expired:
+            raise ToolError("cbl login failed: code expired")
         self.logged_in = code
 
     def mint(self, sub, scope, ttl_days):

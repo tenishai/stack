@@ -273,20 +273,36 @@ class Installer:
 
     def bootstrap_cabal(self, app: App) -> None:
         """cabal prints a one-time operator code at startup, good for five
-        minutes; catch it and log in so later apps can mint tokens."""
+        minutes; catch it and log in so later apps can mint tokens.
+
+        A pod that has been up longer than that (a rerun, or a build that
+        took its time) holds an expired code, so the login is tried with
+        what the log shows from the last few minutes, and on a miss or a
+        refusal the deployment is restarted once for a fresh one."""
         if self.c.cabal is None:
             raise ToolError("no cabal client configured (cbl)")
+        code = self.c.kubectl.logs_grep(app.namespace, app.name, BOOTSTRAP_CODE, since="4m")
+        if code:
+            try:
+                self.c.cabal.login(code)
+                self.report.note(f"{app.name}: operator logged in with the bootstrap code", self.o.say)
+                return
+            except ToolError as exc:
+                self.o.say(f"  {app.name}: the code in the log was refused ({exc}); restarting for a fresh one")
+        else:
+            self.o.say(f"  {app.name}: no fresh bootstrap code in the log; restarting for one")
+        self.c.kubectl.restart(app.namespace, app.name)
         deadline = time.monotonic() + self.o.bootstrap_seconds
         while True:
-            code = self.c.kubectl.logs_grep(app.namespace, app.name, BOOTSTRAP_CODE)
+            code = self.c.kubectl.logs_grep(app.namespace, app.name, BOOTSTRAP_CODE, since="4m")
             if code:
                 break
             if time.monotonic() > deadline:
-                raise ToolError(f"{app.name}: no bootstrap code in its log; restart the "
-                                "deployment and run again within five minutes")
+                raise ToolError(f"{app.name}: no bootstrap code in its log after a restart; "
+                                "is `cabal.bootstrap_code` set to `log`?")
             time.sleep(self.o.poll_seconds)
         self.c.cabal.login(code)
-        self.report.note(f"{app.name}: operator logged in with the bootstrap code", self.o.say)
+        self.report.note(f"{app.name}: restarted, operator logged in with the fresh code", self.o.say)
 
     # --- values -------------------------------------------------------------
 
