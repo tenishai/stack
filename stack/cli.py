@@ -69,13 +69,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     cabal = None
     cabal_app = next((x for x in stack.apps if x.bootstrap == "cabal"), None)
-    pf = None
     if cabal_app is not None:
         if not a.cbl:
             print("this stack bootstraps cabal: pass --cbl <path to cbl> (or STACK_CBL)", file=sys.stderr)
             return 2
-        pf = kubectl.port_forward(cabal_app.namespace, f"svc/{cabal_app.name}", a.cabal_port, 80)
-        cabal = CblCLI(a.cbl, f"http://127.0.0.1:{a.cabal_port}", str(path.parent / ".cabal-home"))
+        ns, svc, port = cabal_app.namespace, f"svc/{cabal_app.name}", a.cabal_port
+        cabal = CblCLI(a.cbl, f"http://127.0.0.1:{port}", str(path.parent / ".cabal-home"),
+                       forward=lambda: kubectl.port_forward(ns, svc, port, 80))
     clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(), cabal=cabal)
     opts = Options(stack_dir=path.parent, repo_root=Path(a.repos).expanduser() if a.repos else path.parent,
                    merge_setup_prs=a.merge_setup_prs)
@@ -86,8 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         gojira.close()
-        if pf:
-            pf.terminate()
+        if cabal is not None:
+            cabal.close()
     print(f"\ndone: {len(report.done)} steps" + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
     return 0
 
