@@ -13,6 +13,7 @@ class FakeGojira:
         # what a fresh connect comes back as, by app name (default awaiting_pr with a PR)
         self.connect_outcome: dict[str, tuple[str, str]] = {}
         self.sync_outcome: dict[int, str] = {}
+        self.provision_outcomes: dict[int, list[str]] = {}
 
     def api_token(self) -> str:
         return "tok-123"
@@ -40,7 +41,8 @@ class FakeGojira:
 
     def provision(self, app_id):
         self.calls.append(f"provision:{app_id}")
-        self._apps[app_id].status = "active"
+        outcomes = self.provision_outcomes.get(app_id, [])
+        self._apps[app_id].status = outcomes.pop(0) if outcomes else "active"
 
     def sync(self, app_id):
         self.calls.append(f"sync:{app_id}")

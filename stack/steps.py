@@ -110,7 +110,18 @@ class Installer:
         row = self.connect(app)
         row = self.wait_provisioned(row)
         if row.status == FAILED:
-            raise ToolError(f"{app.name}: provision failed; see the app's page on Gojira")
+            # The first minute after an install is eventually consistent on
+            # Google's side (a WIF provider resurrected by terraform, an IAM
+            # policy another provision just wrote: tenishai/gojira#117, #107).
+            # One more try after the settle time, then it is a real failure.
+            self.o.say(f"  {app.name}: provision failed; trying once more in "
+                       f"{self.o.iam_settle_seconds:.0f}s")
+            time.sleep(self.o.iam_settle_seconds)
+            self.c.gojira.provision(row.id)
+            row = self.wait_provisioned(self.c.gojira.app(row.id))
+            if row.status == FAILED:
+                raise ToolError(f"{app.name}: provision failed twice; see the app's page on Gojira")
+            self.report.note(f"{app.name}: provisioned on the second try", self.o.say)
         self.apply_configmaps(app)
         self.apply_secrets(app)
         row = self.settle_setup_pr(app, row)
