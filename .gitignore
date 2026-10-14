@@ -9,3 +9,4 @@ dist/
 *-token
 *.env
 .generated/
+.cabal-home/
