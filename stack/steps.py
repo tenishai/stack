@@ -310,11 +310,11 @@ class Installer:
         if s.kind == "literal":
             return s.arg
         if s.kind == "file":
-            return s.path.read_text().rstrip("\n")
+            return self._path(s).read_text().rstrip("\n")
         if s.kind == "gojira-token":
             return self.c.gojira.api_token()
         if s.kind == "template":
-            return s.path.read_text().replace("{gojira_token}", self.c.gojira.api_token()) \
+            return self._path(s).read_text().replace("{gojira_token}", self.c.gojira.api_token()) \
                 .replace("<GOJIRA_API_TOKEN>", self.c.gojira.api_token())
         if s.kind == "generate":
             return self._generated(app, s)
@@ -324,13 +324,20 @@ class Installer:
             return self.c.cabal.mint(s.cabal_sub, s.cabal_scope, self.o.token_ttl_days)
         raise ToolError(f"unknown source {s.kind}")
 
+    def _path(self, s: Source) -> Path:
+        """A relative `file:`/`template:` path is relative to the stack file."""
+        return s.path if s.path.is_absolute() else self.o.stack_dir / s.path
+
     def _generated(self, app: App, s: Source) -> str:
-        """Made once, kept in a 600 file next to the stack file, reused after."""
-        keep = self.o.stack_dir / ".generated" / f"{app.name}-{len(s.arg)}-{s.arg}"
+        """Made once, kept in a 600 file next to the stack file, reused after.
+        A named value (`generate:32:litellm-master-key`) is one file for the
+        whole stack, so every app that names it gets the same bytes."""
+        tag = s.gen_name or f"{app.name}-{s.gen_bytes}"
+        keep = self.o.stack_dir / ".generated" / tag
         keep.parent.mkdir(mode=0o700, exist_ok=True)
         if keep.exists():
             return keep.read_text()
-        value = base64.b64encode(_secrets.token_bytes(int(s.arg))).decode()
+        value = base64.b64encode(_secrets.token_bytes(s.gen_bytes)).decode()
         fd = os.open(keep, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as fh:
             fh.write(value)

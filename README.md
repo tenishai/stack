@@ -34,10 +34,10 @@ dependency order. Every Secret and ConfigMap value is a *source*, never a value:
 
 | Source | Meaning |
 | --- | --- |
-| `file:<path>` | the bytes of a file on your machine (trailing newline stripped) |
-| `generate:<n>` | n random bytes, base64, made once and kept in `.generated/` (mode 600) beside the file |
+| `file:<path>` | the bytes of a file (trailing newline stripped); a relative path is relative to the stack file |
+| `generate:<n>[:<name>]` | n random bytes, base64, made once and kept in `.generated/` (mode 600) beside the file; a named value is one value for every source in the stack that names it |
 | `gojira-token` | the install's own API token, read from Gojira's Secret |
-| `template:<path>` | a file with `{gojira_token}` filled in |
+| `template:<path>` | a file with `{gojira_token}` filled in; relative like `file:` |
 | `cabal-token:<sub>:<scope>` | a 90-day service JWT minted on the cabal this run brought up |
 | `literal:<text>` | the text itself; for names, never for secrets |
 
@@ -52,7 +52,9 @@ setup PR; otherwise the run prints the link and waits.
 `kubectl` on the install's context, `gh` logged in with access to the repos,
 and for a stack with cabal, a `cbl` binary (`--cbl`, from cabal's own venv).
 Gojira is reached through a port-forward of its Service unless `gojira.url`
-is set.
+is set. The dogfood file brings exactly one thing from your machine: the
+GitHub App's private key (`~/tenish-room.pem`); its config files travel with
+it under `examples/dogfood/` and its keys are generated on the first run.
 
 ## What it refuses
 

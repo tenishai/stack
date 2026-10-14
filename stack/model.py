@@ -50,15 +50,27 @@ class Source(BaseModel):
         if text == "gojira-token":
             return cls(kind="gojira-token")
         kind, arg = m.group(1), m.group(2)
-        if kind == "generate" and not arg.isdigit():
-            raise ValueError(f"generate: takes a byte count, got {arg!r}")
+        if kind == "generate" and not re.fullmatch(r"\d+(:[a-z0-9-]+)?", arg):
+            raise ValueError(f"generate: takes a byte count, optionally :<name> to share the value, got {arg!r}")
         if kind == "cabal-token" and ":" not in arg:
             raise ValueError(f"cabal-token takes <sub>:<scope> (e.g. service:kobo:operator), got {arg!r}")
         return cls(kind=kind, arg=arg)
 
     @property
     def path(self) -> Path:
+        """`~` expanded; a relative path is resolved against the stack file's
+        directory by the installer, so a stack file can travel with its files."""
         return Path(self.arg).expanduser()
+
+    # generate:<n>[:<name>] — a named value is shared by every source that
+    # names it (litellm and cabal must hold the same LITELLM_MASTER_KEY).
+    @property
+    def gen_bytes(self) -> int:
+        return int(self.arg.split(":", 1)[0])
+
+    @property
+    def gen_name(self) -> str:
+        return self.arg.split(":", 1)[1] if ":" in self.arg else ""
 
     # cabal-token:<sub>:<scope> — the sub itself holds a colon (service:kobo),
     # so the scope is the last segment.

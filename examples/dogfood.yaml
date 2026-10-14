@@ -4,7 +4,10 @@
 # Order matters and is the dependency order: litellm (the model proxy) first,
 # cabal (the switchboard; needs litellm's key) second, then liminal and kobo,
 # whose Secrets hold tokens minted on that cabal. Values name where they come
-# from on the operator's machine; nothing secret is in this file.
+# from; nothing secret is in this file. Relative paths are relative to this
+# file, so the two config files live in dogfood/ next to it. The only thing
+# you bring by hand is the GitHub App's private key; the keys are generated
+# here and kept in .generated/ (mode 600, gitignored).
 
 gojira:
   namespace: gojira            # port-forwarded on the current kubectl context
@@ -19,18 +22,18 @@ apps:
     repo: tenishai/litellm
     secrets:
       litellm-secrets:
-        LITELLM_MASTER_KEY: file:~/litellm-master-key
+        LITELLM_MASTER_KEY: generate:32:litellm-master-key   # one value, shared with cabal below
 
   - name: cabal
     repo: tenishai/cabal
     bootstrap: cabal           # catch the bootstrap code from its log, log in, mint below
     configmaps:
       cabal-config:
-        identity.toml: file:~/src/git/stack/dogfood/cabal-identity.toml
+        identity.toml: file:dogfood/cabal-identity.toml
     secrets:
       cabal-secrets:
         CABAL_MASTER_KEY: generate:32
-        LITELLM_MASTER_KEY: file:~/litellm-master-key
+        LITELLM_MASTER_KEY: generate:32:litellm-master-key
 
   - name: liminal
     repo: tenishai/liminal
@@ -45,6 +48,6 @@ apps:
       kobo-github:
         private-key.pem: file:~/tenish-room.pem
       kobo-config:
-        config.yaml: template:~/src/git/stack/dogfood/kobo-config.template.yaml
+        config.yaml: template:dogfood/kobo-config.template.yaml
       kobo-cabal:
         CABAL_OPERATOR_TOKEN: cabal-token:service:kobo:operator
