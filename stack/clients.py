@@ -33,8 +33,11 @@ class ToolError(RuntimeError):
     """A tool said no. The message is the tool's own sentence, trimmed."""
 
 
-def _run(args: list[str], *, stdin: str | None = None, check: bool = True) -> str:
-    proc = subprocess.run(args, input=stdin, capture_output=True, text=True)
+def _run(args: list[str], *, stdin: str | None = None, check: bool = True, timeout: int = 120) -> str:
+    try:
+        proc = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"{' '.join(args[:3])} did not answer in {timeout}s") from None
     if check and proc.returncode != 0:
         raise ToolError(f"{' '.join(args[:3])} failed: {proc.stderr.strip()[:400]}")
     return proc.stdout
@@ -148,6 +151,7 @@ class HttpGojira:
 
 
 class KubectlClient(Protocol):
+    def current_context(self) -> str: ...
     def namespace_exists(self, ns: str) -> bool: ...
     def secret_exists(self, ns: str, name: str) -> bool: ...
     def secret_value(self, ns: str, name: str, key: str) -> str: ...
@@ -166,18 +170,26 @@ class KubectlCLI:
         self._ctx = ["--context", context] if context else []
         if not shutil.which("kubectl"):
             raise ToolError("kubectl is not on PATH")
+        # Every call answers or fails within seconds: a context whose cluster is
+        # gone, unreachable or wants an interactive login must not hang the
+        # installer (a stranger's first run sat in a secret read until ^C,
+        # 2026-10-14). Not on port-forward, which is meant to live.
+        self._base = ["kubectl", *self._ctx, "--request-timeout=20s"]
 
     def _k(self, *args: str, stdin: str | None = None, check: bool = True) -> str:
-        return _run(["kubectl", *self._ctx, *args], stdin=stdin, check=check)
+        return _run([*self._base, *args], stdin=stdin, check=check, timeout=60)
 
     def _exists(self, ns: str, kind: str, name: str) -> bool:
-        proc = subprocess.run(["kubectl", *self._ctx, "-n", ns, "get", kind, name],
-                              capture_output=True, text=True)
-        return proc.returncode == 0
+        return subprocess.run([*self._base, "-n", ns, "get", kind, name], capture_output=True, timeout=60).returncode == 0
+
+    def current_context(self) -> str:
+        """The context calls go to: the configured one, else kubectl's current."""
+        if self._ctx:
+            return self._ctx[1]
+        return _run(["kubectl", "config", "current-context"], check=False, timeout=30).strip() or "(none)"
 
     def namespace_exists(self, ns: str) -> bool:
-        return subprocess.run(["kubectl", *self._ctx, "get", "ns", ns],
-                              capture_output=True).returncode == 0
+        return subprocess.run([*self._base, "get", "ns", ns], capture_output=True, timeout=60).returncode == 0
 
     def secret_exists(self, ns, name) -> bool:
         return self._exists(ns, "secret", name)

@@ -63,6 +63,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         kubectl = KubectlCLI(stack.gojira.kube_context)
+        context = kubectl.current_context()
+        if not kubectl.namespace_exists(stack.gojira.namespace):
+            # Said before anything is touched: a stranger's current context can
+            # be any cluster at all, and a missing KUBECONFIG is the usual cause.
+            print(f"cannot reach Gojira: kubectl context {context!r} has no namespace "
+                  f"{stack.gojira.namespace!r}.\nIs KUBECONFIG the install's (the file `make install` wrote)? "
+                  "Pin the context with gojira.kube_context in the stack file.", file=sys.stderr)
+            return 1
+        print(f"Gojira: context {context}, namespace {stack.gojira.namespace}")
         gojira = HttpGojira(kubectl, stack.gojira.url, stack.gojira.namespace)
     except ToolError as exc:
         print(f"cannot reach Gojira: {exc}", file=sys.stderr)

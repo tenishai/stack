@@ -61,6 +61,9 @@ class FakeKubectl:
         self.code_after_restart = "FRESH1"
         self.calls: list[str] = []
 
+    def current_context(self):
+        return "fake-context"
+
     def namespace_exists(self, ns):
         return ns in self.namespaces
 
