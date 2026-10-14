@@ -10,7 +10,11 @@
 # here and kept in .generated/ (mode 600, gitignored).
 
 gojira:
-  namespace: gojira            # port-forwarded on the current kubectl context
+  namespace: gojira
+  # Pinned: a stranger's current kubectl context can be any cluster. This is
+  # the name `gcloud container clusters get-credentials` writes for the
+  # dogfood cluster; KUBECONFIG must point at the file that holds it.
+  kube_context: gke_shaz-learning_us-central1_gojira-sandbox
 
 cluster:
   name: gojira-sandbox

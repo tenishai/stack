@@ -52,7 +52,10 @@ setup PR; otherwise the run prints the link and waits.
 `kubectl` on the install's context, `gh` logged in with access to the repos,
 and for a stack with cabal, a `cbl` binary (`--cbl`, from cabal's own venv).
 Gojira is reached through a port-forward of its Service unless `gojira.url`
-is set. The dogfood file brings exactly one thing from your machine: the
+is set. Before touching anything the run names the kubectl context it will
+use and refuses one without Gojira's namespace; `gojira.kube_context` pins
+the context (the dogfood file does), and every kubectl call answers or fails
+within seconds rather than waiting on a cluster that is not there. The dogfood file brings exactly one thing from your machine: the
 GitHub App's private key (`~/tenish-room.pem`); its config files travel with
 it under `examples/dogfood/` and its keys are generated on the first run.
 
