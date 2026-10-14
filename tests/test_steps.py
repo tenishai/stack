@@ -95,6 +95,29 @@ def test_a_second_run_changes_nothing(home):
     assert oct(kept.stat().st_mode)[-3:] == "600" and key not in "\n".join(lines)
 
 
+def test_a_named_generated_value_is_shared_and_relative_paths_follow_the_file(home):
+    """litellm and cabal must hold the same LITELLM_MASTER_KEY, so one named
+    `generate:` serves both; and a `file:` without a leading slash is read next
+    to the stack file, so the file and its configs travel together."""
+    (home / "configs").mkdir()
+    (home / "configs" / "identity.toml").write_text("[cabal]\nport = 7400\n")
+    stack = _stack(home, [
+        {"name": "litellm", "repo": "o/litellm",
+         "secrets": {"litellm-secrets": {"LITELLM_MASTER_KEY": "generate:32:litellm-master-key"}}},
+        {"name": "cabal", "repo": "o/cabal", "bootstrap": "cabal",
+         "configmaps": {"cabal-config": {"identity.toml": "file:configs/identity.toml"}},
+         "secrets": {"cabal-secrets": {"CABAL_MASTER_KEY": "generate:32",
+                                       "LITELLM_MASTER_KEY": "generate:32:litellm-master-key"}}},
+    ])
+    kubectl = FakeKubectl()
+    _run(home, stack, kubectl=kubectl, cabal=FakeCabal(), merge_setup_prs=True)
+    shared = kubectl.secrets[("litellm", "litellm-secrets")]["LITELLM_MASTER_KEY"]
+    assert kubectl.secrets[("cabal", "cabal-secrets")]["LITELLM_MASTER_KEY"] == shared
+    assert kubectl.secrets[("cabal", "cabal-secrets")]["CABAL_MASTER_KEY"] != shared
+    assert kubectl.configmaps[("cabal", "cabal-config")]["identity.toml"] == "[cabal]\nport = 7400"
+    assert sorted(p.name for p in (home / ".generated").iterdir()) == ["cabal-32", "litellm-master-key"]
+
+
 def test_without_auto_merge_it_waits_and_names_the_pr(home):
     stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
     github = FakeGitHub()

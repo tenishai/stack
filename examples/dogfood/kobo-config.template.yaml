@@ -1,0 +1,29 @@
+# kobo config for the tenishai dogfood (ns kobo). Mounted from Secret
+# kobo-config at /config/config.yaml (KOBO_CONFIG). GOJIRA_TOKEN is filled
+# at secret-creation time from gojira-github-app/api_token.
+github_org: tenishai
+org_repo: tenishai/kobo-config-dogfood
+runtime_image: us-central1-docker.pkg.dev/shaz-learning/runtime/daedalus-runtime:aacb12d
+gojira_url: http://gojira.gojira.svc.cluster.local
+gojira_token: "<GOJIRA_API_TOKEN>"
+gojira_cluster: gojira-sandbox
+gcp_project: shaz-learning
+vertex_project: shaz-learning
+vertex_location: us-central1
+model_group: ""
+models:
+  - id: vertex_ai/gemini-2.5-flash
+    label: Gemini 2.5 Flash
+  - id: vertex_ai/gemini-2.5-pro
+    label: Gemini 2.5 Pro
+skills_repo: kobo-skills-dogfood
+skills_bucket: shaz-learning-kobo-skills
+personas_bucket: shaz-learning-kobo-personas
+api_base_url: http://kobo.kobo.svc.cluster.local
+workdir: /data/work
+db_url: sqlite:////data/kobo.db
+ui_dist: /srv/ui
+iap_audience: ""
+github_app_id: "5141957"
+github_app_installation_id: "166677836"
+github_app_private_key_path: /secrets/github/private-key.pem

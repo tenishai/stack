@@ -21,11 +21,20 @@ def test_the_dogfood_example_loads_in_dependency_order():
     tok = kobo.secrets["kobo-cabal"]["CABAL_OPERATOR_TOKEN"]
     assert (tok.kind, tok.cabal_sub, tok.cabal_scope) == ("cabal-token", "service:kobo", "operator")
     assert kobo.secrets["kobo-github"]["private-key.pem"].path == Path("~/tenish-room.pem").expanduser()
+    # the file travels: its config files are relative to it, its keys generated and shared by name
+    cabal = s.apps[1]
+    assert cabal.configmaps["cabal-config"]["identity.toml"].path == Path("dogfood/cabal-identity.toml")
+    assert (ROOT / "examples" / "dogfood" / "cabal-identity.toml").is_file()
+    litellm_key = s.apps[0].secrets["litellm-secrets"]["LITELLM_MASTER_KEY"]
+    assert (litellm_key.gen_bytes, litellm_key.gen_name) == (32, "litellm-master-key")
+    assert cabal.secrets["cabal-secrets"]["LITELLM_MASTER_KEY"].gen_name == "litellm-master-key"
+    assert cabal.secrets["cabal-secrets"]["CABAL_MASTER_KEY"].gen_name == ""
 
 
 @pytest.mark.parametrize("text,kind,arg", [
     ("file:~/x", "file", "~/x"),
     ("generate:32", "generate", "32"),
+    ("generate:32:litellm-master-key", "generate", "32:litellm-master-key"),
     ("gojira-token", "gojira-token", ""),
     ("template:/etc/t.yaml", "template", "/etc/t.yaml"),
     ("cabal-token:service:liminal:secrets-fetch", "cabal-token", "service:liminal:secrets-fetch"),
@@ -36,7 +45,8 @@ def test_value_sources_parse(text, kind, arg):
     assert (s.kind, s.arg) == (kind, arg)
 
 
-@pytest.mark.parametrize("text", ["~/x", "generate:lots", "cabal-token:nocolon", "env:HOME", ""])
+@pytest.mark.parametrize("text", ["~/x", "generate:lots", "generate:32:Not_A_Name", "cabal-token:nocolon",
+                                  "env:HOME", ""])
 def test_a_value_that_is_not_a_source_is_refused(text):
     with pytest.raises(ValueError):
         Source.parse(text)

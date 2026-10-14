@@ -8,3 +8,5 @@ dist/
 *.pem
 *-token
 *.env
+.generated/
+.cabal-home/
