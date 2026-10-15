@@ -82,3 +82,16 @@ def test_the_example_holds_no_secret_values():
         for keys in list(obj.get("secrets", {}).values()) + list(obj.get("configmaps", {}).values()):
             for value in keys.values():
                 assert Source.parse(value).kind != "literal", "a literal in a Secret is a value in git"
+
+
+def test_a_deploy_repo_needs_an_image_and_contract_needs_a_deploy_repo():
+    base = {"name": "cabal", "repo": "tenishai/cabal"}
+    with pytest.raises(ValueError, match="deploy_repo needs image"):
+        App.model_validate({**base, "deploy_repo": "acme/cabal-deploy"})
+    with pytest.raises(ValueError, match="contract: is for a deploy_repo"):
+        App.model_validate({**base, "contract": {"env": {"X": "1"}}})
+    with pytest.raises(ValueError):
+        App.model_validate({**base, "image": "r/x:1", "deploy_repo": "not-a-repo"})
+    app = App.model_validate({**base, "image": "r/x:1", "deploy_repo": "acme/cabal-deploy"})
+    assert app.connected_repo == "acme/cabal-deploy"
+    assert App.model_validate(base).connected_repo == "tenishai/cabal"

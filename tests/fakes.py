@@ -7,6 +7,7 @@ from stack.clients import AppRow, ToolError
 
 class FakeGojira:
     def __init__(self, apps: list[AppRow] | None = None, clusters: list[dict] | None = None):
+        self.connected: dict[str, str] = {}   # app name -> repo it was connected with
         self._apps = {a.id: a for a in (apps or [])}
         self._clusters = clusters or []
         self.calls: list[str] = []
@@ -33,6 +34,7 @@ class FakeGojira:
         return self._apps[app_id]
 
     def connect(self, name, repo, workload_class, environment, namespace, auto_merge):
+        self.connected[name] = repo
         self.calls.append(f"connect:{name}:auto={auto_merge}")
         status, url = self.connect_outcome.get(name, ("awaiting_pr", f"https://github.com/{repo}/pull/1"))
         row = AppRow(id=len(self._apps) + 1, name=name, status=status, setup_pr_url=url)
@@ -103,11 +105,28 @@ class FakeKubectl:
 
 
 class FakeGitHub:
-    def __init__(self, states: dict[str, str] | None = None, runs: dict[str, tuple[str, str]] | None = None):
+    def __init__(self, states: dict[str, str] | None = None, runs: dict[str, tuple[str, str]] | None = None,
+                 repos: dict[str, dict[str, str]] | None = None):
         self.states = states or {}
         self.runs = runs or {}
         self.outcomes: dict[str, list[str]] = {}
         self.calls: list[str] = []
+        self.repos: dict[str, dict[str, str]] = repos if repos is not None else {}   # repo -> path -> content
+
+    def repo_exists(self, repo):
+        return repo in self.repos
+
+    def create_repo(self, repo):
+        self.calls.append(f"create:{repo}")
+        self.repos[repo] = {}
+
+    def push_files(self, repo, files, message):
+        current = self.repos[repo]
+        changed = sum(1 for k, v in files.items() if current.get(k) != v)
+        if changed:
+            self.calls.append(f"push:{repo}:{changed}")
+            current.update(files)
+        return changed
 
     def pr_state(self, pr_url):
         return self.states.get(pr_url, "open")

@@ -47,6 +47,29 @@ that an operator applies once: a ClusterRole Gojira then binds through
 `auto_merge_setup_pr: true`, or a run with `--merge-setup-prs`, merges its own
 setup PR; otherwise the run prints the link and waits.
 
+## Software you did not write
+
+An app can be a published image instead of a repo to build (Gojira's `image:`,
+tenishai/gojira#108). The entry names the upstream repo (cloned under
+`--repos`, for its `k8s/base` and any cluster objects), the image, and a repo
+of your own for the installer to write and connect:
+
+```yaml
+  - name: cabal
+    repo: tenishai/cabal                       # the upstream: its k8s/base travels
+    image: us-central1-docker.pkg.dev/tenish/images/cabal:0.3.2
+    deploy_repo: acme/cabal-deploy             # created if missing; gojira.yaml + k8s/base, nothing else
+    contract:                                  # merged last into that gojira.yaml: the install's facts
+      env: { VERTEX_PROJECT: acme-prod }
+      identity: { gcp_roles: [roles/aiplatform.user] }
+```
+
+The upstream's `build_args`, `arch` and `node_selector` are left behind: nothing
+is built, and the platform's architecture is the install's. The deploy repo is
+pushed directly (it exists for exactly this content); a rerun with identical
+content pushes nothing. Your deploy identities must be able to read the image's
+registry; a private Artifact Registry wants `roles/artifactregistry.reader`.
+
 ## What it needs
 
 `kubectl` on the install's context, `gh` logged in with access to the repos,

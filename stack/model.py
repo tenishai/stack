@@ -104,6 +104,15 @@ class App(BaseModel):
     # A first install of a repo the operator owns may let the installer
     # merge the setup PR. Off by default: the PR is the review.
     auto_merge_setup_pr: bool = False
+    # Deploy a published image from a repo of the operator's own (gojira#108):
+    # `repo` stays the upstream, whose k8s/base and cluster objects are read
+    # from the clone under --repos; `deploy_repo` (org/name) is created if
+    # missing, given a gojira.yaml naming `image`, and connected in its place.
+    # `contract` keys are merged last into that gojira.yaml (env, identity,
+    # ...): the install's facts, which the upstream's contract cannot know.
+    image: str = ""
+    deploy_repo: str = Field(default="", pattern=r"^$|^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+    contract: dict = {}
 
     @field_validator("configmaps", "secrets", mode="before")
     @classmethod
@@ -117,7 +126,16 @@ class App(BaseModel):
     def _defaults(self):
         if not self.namespace:
             self.namespace = self.name
+        if self.deploy_repo and not self.image:
+            raise ValueError(f"{self.name}: deploy_repo needs image: (the published image the deploy repo names)")
+        if self.contract and not self.deploy_repo:
+            raise ValueError(f"{self.name}: contract: is for a deploy_repo the installer writes; edit {self.repo}'s gojira.yaml instead")
         return self
+
+    @property
+    def connected_repo(self) -> str:
+        """The repo Gojira connects: the deploy repo when there is one."""
+        return self.deploy_repo or self.repo
 
     def needs_cabal(self) -> bool:
         return any(s.kind == "cabal-token" for keys in self.secrets.values() for s in keys.values())
