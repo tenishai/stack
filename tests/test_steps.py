@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from stack.clients import ToolError
 from stack.model import Stack
@@ -273,3 +274,66 @@ def test_no_code_in_the_log_also_restarts(home):
     cabal = FakeCabal()
     _run(home, stack, kubectl=kubectl, cabal=cabal, merge_setup_prs=True)
     assert "restart:cabal/cabal" in kubectl.calls and cabal.logged_in == "FRESH1"
+
+
+# --- gojira#108: a published image deployed from a repo of the operator's own
+
+
+def _upstream(home):
+    """The clone of an upstream under --repos: its contract (with build args and
+    an arch the install should not inherit) and the k8s/base it keeps."""
+    up = home / "repos" / "cabal"
+    (up / "k8s" / "base").mkdir(parents=True)
+    (up / "k8s" / "cluster").mkdir()
+    (up / "gojira.yaml").write_text(
+        "app: cabal\nclass: gateway\nenvironments:\n  - {name: dev, cluster: other, namespace: cabal}\n"
+        "secrets_from: [cabal-secrets]\nenv:\n  VERTEX_PROJECT: upstream-proj\n  LOG: info\n"
+        "build_args: {EXTRA_INDEX_URL: x}\narch: arm64\nnode_selector: {a: b}\nport: 7400\n"
+    )
+    (up / "k8s" / "base" / "pvc.yaml").write_text("kind: PersistentVolumeClaim\n")
+    (up / "k8s" / "base" / "deployment.yaml").write_text("kind: Deployment\n")
+    (up / "k8s" / "cluster" / "rbac.yaml").write_text("kind: ClusterRole\n")
+
+
+def test_a_published_image_gets_a_deploy_repo_the_installer_writes_and_connects(home):
+    _upstream(home)
+    stack = _stack(home, [{
+        "name": "cabal", "repo": "tenishai/cabal", "image": "r.example/tenish/cabal:3.2",
+        "deploy_repo": "acme/cabal-deploy", "cluster_objects": ["k8s/cluster/rbac.yaml"],
+        "contract": {"env": {"VERTEX_PROJECT": "proj"}, "identity": {"gcp_roles": ["roles/aiplatform.user"]}},
+    }])
+    gojira, kubectl, github = FakeGojira(), FakeKubectl(), FakeGitHub()
+    _run(home, stack, gojira=gojira, kubectl=kubectl, github=github, merge_setup_prs=True)
+    assert github.calls[:2] == ["create:acme/cabal-deploy", "push:acme/cabal-deploy:3"]
+    files = github.repos["acme/cabal-deploy"]
+    assert sorted(files) == ["gojira.yaml", "k8s/base/deployment.yaml", "k8s/base/pvc.yaml"]
+    doc = yaml.safe_load(files["gojira.yaml"])
+    assert doc["app"] == "cabal" and doc["image"] == "r.example/tenish/cabal:3.2"
+    assert doc["environments"] == [{"name": "dev", "cluster": "gojira-sandbox", "namespace": "cabal"}]
+    assert doc["secrets_from"] == ["cabal-secrets"] and doc["port"] == 7400          # the upstream's needs kept
+    assert doc["env"] == {"VERTEX_PROJECT": "proj", "LOG": "info"}                  # contract: merged over
+    assert doc["identity"] == {"gcp_roles": ["roles/aiplatform.user"]}
+    for gone in ("build_args", "arch", "node_selector"):
+        assert gone not in doc                                                      # nothing is built here
+    assert [c for c in gojira.calls if c.startswith("connect")] == ["connect:cabal:auto=True"]
+    assert gojira.connected["cabal"] == "acme/cabal-deploy"                        # the deploy repo, not upstream
+    assert kubectl.applied == [str(home / "repos" / "cabal" / "k8s" / "cluster" / "rbac.yaml")]   # from upstream
+    assert "merge:https://github.com/acme/cabal-deploy/pull/1" in github.calls           # its setup PR, not upstream's
+
+
+def test_a_deploy_repo_rerun_pushes_nothing(home):
+    _upstream(home)
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r.example/tenish/cabal:3.2",
+                           "deploy_repo": "acme/cabal-deploy"}])
+    github = FakeGitHub()
+    _run(home, stack, github=github, merge_setup_prs=True)
+    github.calls.clear()
+    _, _, lines = _run(home, stack, github=github, merge_setup_prs=True)
+    assert not [c for c in github.calls if c.startswith(("create", "push"))]
+    assert "cabal: deploy repo acme/cabal-deploy current" in "\n".join(lines)
+
+
+def test_a_deploy_repo_without_the_upstream_clone_stops_with_the_path(home):
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
+    with pytest.raises(ToolError, match="has no k8s/base"):
+        _run(home, stack, github=FakeGitHub(), merge_setup_prs=True)

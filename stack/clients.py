@@ -241,6 +241,9 @@ class KubectlCLI:
 
 
 class GitHubClient(Protocol):
+    def repo_exists(self, repo: str) -> bool: ...
+    def create_repo(self, repo: str) -> None: ...
+    def push_files(self, repo: str, files: dict[str, str], message: str) -> int: ...
     def pr_state(self, pr_url: str) -> str: ...
     def merge_pr(self, pr_url: str) -> None: ...
     def dispatch(self, repo: str, workflow: str) -> None: ...
@@ -258,6 +261,38 @@ class GhCLI:
         if not m:
             raise ToolError(f"not a pull request URL: {pr_url}")
         return m.group(1), m.group(2)
+
+    def repo_exists(self, repo) -> bool:
+        return subprocess.run(["gh", "repo", "view", repo, "--json", "name"], capture_output=True).returncode == 0
+
+    def create_repo(self, repo) -> None:
+        _run(["gh", "repo", "create", repo, "--private",
+              "--description", "Deploy repo for a published image, managed by the stack installer (Gojira image:)"])
+
+    def push_files(self, repo, files, message) -> int:
+        """Write `files` onto the repo's default branch and push; the number of
+        files that changed (0 means nothing was pushed). Direct to the branch:
+        this is a repo the installer made for exactly this content."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            _run(["gh", "repo", "clone", repo, tmp, "--", "--quiet"])
+            git = ["git", "-C", tmp]
+            if subprocess.run([*git, "rev-parse", "--verify", "HEAD"], capture_output=True).returncode != 0:
+                _run([*git, "symbolic-ref", "HEAD", "refs/heads/main"])      # an empty repo: start main
+            changed = 0
+            for rel, content in files.items():
+                target = os.path.join(tmp, rel)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if os.path.exists(target) and open(target).read() == content:
+                    continue
+                with open(target, "w") as fh:
+                    fh.write(content)
+                _run([*git, "add", "--", rel])
+                changed += 1
+            if changed:
+                _run([*git, "commit", "-q", "-s", "-m", message])
+                _run([*git, "push", "-q", "-u", "origin", "HEAD"])
+            return changed
 
     def pr_state(self, pr_url) -> str:
         repo, num = self._split(pr_url)

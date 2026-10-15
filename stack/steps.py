@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from stack.clients import AppRow, CabalClient, GitHubClient, GojiraClient, KubectlClient, ToolError
 from stack.model import App, Source, Stack
 
@@ -106,6 +108,8 @@ class Installer:
     # --- one app ------------------------------------------------------------
 
     def install_app(self, app: App) -> AppRow:
+        if app.deploy_repo:
+            self.ensure_deploy_repo(app)
         self.apply_cluster_objects(app)
         row = self.connect(app)
         row = self.wait_provisioned(row)
@@ -154,6 +158,45 @@ class Installer:
             out = self.c.kubectl.apply_file(str(path))
             self.report.note(f"{app.name}: applied {rel} ({out.split()[-1] if out else 'ok'})", self.o.say)
 
+    def ensure_deploy_repo(self, app: App) -> None:
+        """The repo Gojira connects when the app is a published image: created
+        if missing, holding exactly a gojira.yaml that names the image and the
+        k8s/base the upstream keeps. Idempotent: identical content pushes
+        nothing. The upstream's build_args, arch and node_selector are left
+        behind (there is no build, and the platform's arch is the install's);
+        `contract:` from the stack file is merged last."""
+        files = self.deploy_repo_files(app)
+        if not self.c.github.repo_exists(app.deploy_repo):
+            self.c.github.create_repo(app.deploy_repo)
+            self.report.note(f"{app.name}: created deploy repo {app.deploy_repo}", self.o.say)
+        changed = self.c.github.push_files(app.deploy_repo, files, f"deploy {app.image}")
+        self.report.note(f"{app.name}: deploy repo {app.deploy_repo} "
+                         + (f"updated ({changed} files)" if changed else "current"), self.o.say)
+
+    def deploy_repo_files(self, app: App) -> dict[str, str]:
+        upstream = self.o.repo_root / app.repo.split("/")[1]
+        base = upstream / "k8s" / "base"
+        if not base.is_dir():
+            raise ToolError(f"{app.name}: {app.repo} has no k8s/base at {base} (clone it under {self.o.repo_root})")
+        doc = {}
+        contract = upstream / "gojira.yaml"
+        if contract.is_file():
+            doc = yaml.safe_load(contract.read_text()) or {}
+        for key in ("app", "class", "image", "environments", "cluster", "namespace",
+                    "build_args", "arch", "node_selector"):
+            doc.pop(key, None)
+        doc = {"app": app.name, "class": app.workload_class, "image": app.image,
+               "environments": [{"name": app.environment, "cluster": self.stack.cluster.name,
+                                 "namespace": app.namespace}], **doc}
+        for key, value in app.contract.items():
+            doc[key] = {**doc[key], **value} if isinstance(value, dict) and isinstance(doc.get(key), dict) else value
+        files = {"gojira.yaml": "# Deploy contract written by the stack installer: the image is published upstream;\n"
+                                "# this repo holds what the deploy needs. Change the stack file, not this file.\n"
+                                + yaml.safe_dump(doc, sort_keys=False)}
+        for path in sorted(p for p in base.iterdir() if p.is_file()):
+            files[f"k8s/base/{path.name}"] = path.read_text()
+        return files
+
     def connect(self, app: App) -> AppRow:
         for row in self.c.gojira.apps():
             if row.name == app.name:
@@ -163,7 +206,7 @@ class Installer:
                     self.report.note(f"{app.name}: provision pressed again", self.o.say)
                 return row
         auto = app.auto_merge_setup_pr or self.o.merge_setup_prs
-        row = self.c.gojira.connect(app.name, app.repo, app.workload_class, app.environment,
+        row = self.c.gojira.connect(app.name, app.connected_repo, app.workload_class, app.environment,
                                     app.namespace, auto)
         self.report.note(f"{app.name}: connected (app {row.id}, new)", self.o.say)
         return row
@@ -230,9 +273,9 @@ class Installer:
         _, total = self.c.kubectl.pods_ready(app.namespace)
         if total:
             return
-        status, _ = self.c.github.last_run(app.repo, WORKFLOW)
+        status, _ = self.c.github.last_run(app.connected_repo, WORKFLOW)
         if status not in ("queued", "in_progress"):
-            self.c.github.dispatch(app.repo, WORKFLOW)
+            self.c.github.dispatch(app.connected_repo, WORKFLOW)
             self.report.note(f"{app.name}: deploy dispatched (namespace was empty)", self.o.say)
         else:
             self.report.note(f"{app.name}: deploy already running", self.o.say)
@@ -241,18 +284,18 @@ class Installer:
         self.o.say(f"  {app.name}: the deploy failed; a fresh identity takes about a minute "
                    f"to be usable, trying once more in {self.o.iam_settle_seconds:.0f}s")
         time.sleep(self.o.iam_settle_seconds)
-        self.c.github.dispatch(app.repo, WORKFLOW)
+        self.c.github.dispatch(app.connected_repo, WORKFLOW)
         self.report.note(f"{app.name}: deploy dispatched again", self.o.say)
         if self.wait_run(app) != "success":
             raise ToolError(f"{app.name}: the deploy failed twice; read the latest {WORKFLOW} run on "
-                            f"https://github.com/{app.repo}/actions")
+                            f"https://github.com/{app.connected_repo}/actions")
 
     def wait_run(self, app: App) -> str:
         """The conclusion of the latest workflow run once it completes."""
         deadline = time.monotonic() + self.o.rollout_seconds
         time.sleep(min(self.o.poll_seconds, 5))  # the dispatch takes a moment to appear
         while True:
-            status, conclusion = self.c.github.last_run(app.repo, WORKFLOW)
+            status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
             if status == "completed":
                 return conclusion
             if time.monotonic() > deadline:
