@@ -185,6 +185,14 @@ class Installer:
         for key in ("app", "class", "image", "environments", "cluster", "namespace",
                     "build_args", "arch", "node_selector"):
             doc.pop(key, None)
+        # An adopted account (identity.gsa) lives in the upstream's own project;
+        # this install cannot adopt it (litellm on 2026-10-22: PERMISSION_DENIED
+        # listing accounts in another project). Keep the roles, drop the account;
+        # `contract:` may name one of this install's own.
+        if isinstance(doc.get("identity"), dict):
+            doc["identity"].pop("gsa", None)
+            if not doc["identity"]:
+                doc.pop("identity")
         doc = {"app": app.name, "class": app.workload_class, "image": app.image,
                "environments": [{"name": app.environment, "cluster": self.stack.cluster.name,
                                  "namespace": app.namespace}], **doc}

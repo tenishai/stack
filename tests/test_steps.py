@@ -288,6 +288,7 @@ def _upstream(home):
     (up / "gojira.yaml").write_text(
         "app: cabal\nclass: gateway\nenvironments:\n  - {name: dev, cluster: other, namespace: cabal}\n"
         "secrets_from: [cabal-secrets]\nenv:\n  VERTEX_PROJECT: upstream-proj\n  LOG: info\n"
+        "identity: {gsa: cabal@upstream-proj.iam.gserviceaccount.com, gcp_roles: [roles/x]}\n"
         "build_args: {EXTRA_INDEX_URL: x}\narch: arm64\nnode_selector: {a: b}\nport: 7400\n"
     )
     (up / "k8s" / "base" / "pvc.yaml").write_text("kind: PersistentVolumeClaim\n")
@@ -312,13 +313,24 @@ def test_a_published_image_gets_a_deploy_repo_the_installer_writes_and_connects(
     assert doc["environments"] == [{"name": "dev", "cluster": "gojira-sandbox", "namespace": "cabal"}]
     assert doc["secrets_from"] == ["cabal-secrets"] and doc["port"] == 7400          # the upstream's needs kept
     assert doc["env"] == {"VERTEX_PROJECT": "proj", "LOG": "info"}                  # contract: merged over
-    assert doc["identity"] == {"gcp_roles": ["roles/aiplatform.user"]}
+    assert doc["identity"] == {"gcp_roles": ["roles/aiplatform.user"]}     # upstream's gsa dropped, roles replaced
     for gone in ("build_args", "arch", "node_selector"):
         assert gone not in doc                                                      # nothing is built here
     assert [c for c in gojira.calls if c.startswith("connect")] == ["connect:cabal:auto=True"]
     assert gojira.connected["cabal"] == "acme/cabal-deploy"                        # the deploy repo, not upstream
     assert kubectl.applied == [str(home / "repos" / "cabal" / "k8s" / "cluster" / "rbac.yaml")]   # from upstream
     assert "merge:https://github.com/acme/cabal-deploy/pull/1" in github.calls           # its setup PR, not upstream's
+
+
+def test_the_upstreams_adopted_account_never_travels(home):
+    """identity.gsa names an account in the upstream's project; the install
+    keeps the roles and leaves the account behind (litellm, 2026-10-22)."""
+    _upstream(home)
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
+    github = FakeGitHub()
+    _run(home, stack, github=github, merge_setup_prs=True)
+    doc = yaml.safe_load(github.repos["acme/d"]["gojira.yaml"])
+    assert doc["identity"] == {"gcp_roles": ["roles/x"]}
 
 
 def test_a_deploy_repo_rerun_pushes_nothing(home):
