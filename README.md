@@ -70,10 +70,38 @@ pushed directly (it exists for exactly this content); a rerun with identical
 content pushes nothing. Your deploy identities must be able to read the image's
 registry; a private Artifact Registry wants `roles/artifactregistry.reader`.
 
+## Upgrading
+
+`stack upgrade stack.yaml [app …]` converges a changed `image:` onto a running
+install (tenishai/stack#12). Bump the tag in the stack file and run it: for
+each image app whose deploy repo pins a different digest, the run copies the
+image from `source_image:` into the install registry when it isn't there yet
+(crane, no docker daemon), lands the one-line digest pin on the deploy repo,
+presses provision, lets the regenerated setup PR settle, and is done only when
+the deployment runs the new digest with every pod ready — the receipt, not a
+green run. An app already at its digest says so and is skipped.
+
+```yaml
+  - name: kobo
+    repo: tenishai/kobo
+    image: us-east4-docker.pkg.dev/acme-prod/agent-images/kobo:v0.3.54
+    source_image: ghcr.io/tenishai/kobo         # where releases are published; the tag comes from image:
+    deploy_repo: acme/infra-kobo-deploy
+```
+
+How the pin lands is the file's `upgrade_gate`: `pr` (the default) opens a
+pull request and waits for a person's merge — the review; `push` lands it
+directly, and your running the command is the gate. An app that carries a
+`data_mount` is refused without `--yes`: back up the PVC first. The pin
+push's own CI run fails the contract check by design (the workflow still
+carries the old contract sha); the provision that follows regenerates it.
+
 ## What it needs
 
 `kubectl` on the install's context, `gh` logged in with access to the repos,
-and for a stack with cabal, a `cbl` binary (`--cbl`, from cabal's own venv).
+for a stack with cabal, a `cbl` binary (`--cbl`, from cabal's own venv), and
+for `upgrade`, `crane` (its registry auth comes from your docker credential
+helpers: `gcloud auth configure-docker <host>` covers Artifact Registry).
 Gojira is reached through a port-forward of its Service unless `gojira.url`
 is set. Before touching anything the run names the kubectl context it will
 use and refuses one without Gojira's namespace; `gojira.kube_context` pins

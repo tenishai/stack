@@ -113,6 +113,10 @@ class App(BaseModel):
     image: str = ""
     deploy_repo: str = Field(default="", pattern=r"^$|^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
     contract: dict = {}
+    # Where this app's release images are published (stack#12): a repo ref with
+    # no tag (ghcr.io/example/app). `stack upgrade` copies `<source_image>:<tag
+    # of image:>` into the install registry when the digest isn't there yet.
+    source_image: str = ""
 
     @field_validator("configmaps", "secrets", mode="before")
     @classmethod
@@ -130,6 +134,11 @@ class App(BaseModel):
             raise ValueError(f"{self.name}: deploy_repo needs image: (the published image the deploy repo names)")
         if self.contract and not self.deploy_repo:
             raise ValueError(f"{self.name}: contract: is for a deploy_repo the installer writes; edit {self.repo}'s gojira.yaml instead")
+        if self.source_image and not self.deploy_repo:
+            raise ValueError(f"{self.name}: source_image: is for an image app (set image: and deploy_repo:)")
+        if self.source_image and ("@" in self.source_image or ":" in self.source_image.split("/")[-1]):
+            raise ValueError(f"{self.name}: source_image: is a repo ref with no tag or digest; "
+                             "the tag comes from image:")
         return self
 
     @property
@@ -171,6 +180,9 @@ class Stack(BaseModel):
     gojira: Gojira = Gojira()
     cluster: Cluster
     apps: list[App] = Field(min_length=1)
+    # How `stack upgrade` lands a pin on a deploy repo: a PR someone merges
+    # (the review), or a direct push gated by the operator's own confirm.
+    upgrade_gate: Literal["pr", "push"] = "pr"
 
     @model_validator(mode="after")
     def _order(self):

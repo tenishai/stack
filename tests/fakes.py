@@ -53,12 +53,14 @@ class FakeGojira:
 
 
 class FakeKubectl:
-    def __init__(self, ready: dict[str, tuple[int, int]] | None = None, log_code: str = "ABC123"):
+    def __init__(self, ready: dict[str, tuple[int, int]] | None = None, log_code: str = "ABC123",
+                 images: dict[str, str] | None = None):
         self.namespaces: set[str] = set()
         self.secrets: dict[tuple[str, str], dict[str, str]] = {}
         self.configmaps: dict[tuple[str, str], dict[str, str]] = {}
         self.applied: list[str] = []
         self.ready = ready or {}
+        self.images = images or {}   # ns -> what the deployment runs
         self.log_code = log_code
         self.code_after_restart = "FRESH1"
         self.calls: list[str] = []
@@ -93,6 +95,9 @@ class FakeKubectl:
     def pods_ready(self, ns):
         return self.ready.get(ns, (1, 1))
 
+    def deployed_image(self, ns, deploy):
+        return self.images.get(ns, "")
+
     def logs_grep(self, ns, deploy, pattern, since="10m"):
         return self.log_code
 
@@ -112,6 +117,9 @@ class FakeGitHub:
         self.outcomes: dict[str, list[str]] = {}
         self.calls: list[str] = []
         self.repos: dict[str, dict[str, str]] = repos if repos is not None else {}   # repo -> path -> content
+        # what a freshly opened pin PR's state reads as; "merged" lands its files
+        self.open_pr_state = "merged"
+        self.pr_files: dict[str, dict[str, str]] = {}
 
     def repo_exists(self, repo):
         return repo in self.repos
@@ -128,6 +136,21 @@ class FakeGitHub:
             current.update(files)
         return changed
 
+    def read_file(self, repo, path):
+        try:
+            return self.repos[repo][path]
+        except KeyError:
+            raise ToolError(f"{repo}: no {path}") from None
+
+    def open_pr(self, repo, files, title, body, branch):
+        url = f"https://github.com/{repo}/pull/{100 + len(self.pr_files)}"
+        self.calls.append(f"open_pr:{repo}:{branch}")
+        self.pr_files[url] = dict(files)
+        self.states[url] = self.open_pr_state
+        if self.open_pr_state == "merged":
+            self.repos[repo].update(files)
+        return url
+
     def pr_state(self, pr_url):
         return self.states.get(pr_url, "open")
 
@@ -143,6 +166,23 @@ class FakeGitHub:
 
     def last_run(self, repo, workflow):
         return self.runs.get(repo, ("completed", "success"))
+
+
+class FakeCrane:
+    def __init__(self, digests: dict[str, str] | None = None):
+        self.digests = digests or {}   # ref -> digest
+        self.copied: list[tuple[str, str]] = []
+
+    def digest(self, ref):
+        if ref not in self.digests:
+            raise ToolError(f"{ref}: manifest unknown")
+        return self.digests[ref]
+
+    def copy(self, src, dst):
+        if src not in self.digests:
+            raise ToolError(f"{src}: manifest unknown")
+        self.copied.append((src, dst))
+        self.digests[dst] = self.digests[src]
 
 
 class FakeCabal:
