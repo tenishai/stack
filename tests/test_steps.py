@@ -349,3 +349,51 @@ def test_a_deploy_repo_without_the_upstream_clone_stops_with_the_path(home):
     stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
     with pytest.raises(ToolError, match="has no k8s/base"):
         _run(home, stack, github=FakeGitHub(), merge_setup_prs=True)
+
+
+def test_the_installs_own_base_files_travel_and_are_listed(home):
+    """An ExternalSecret only this install knows (its vault path) goes into the
+    deploy repo's k8s/base and into the kustomization, or Gojira drops it from
+    the build on the next provision (kobo-okta, 2026-11-05)."""
+    _upstream(home)
+    (home / "repos" / "cabal" / "k8s" / "base" / "kustomization.yaml").write_text(
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"
+        "resources:\n  - deployment.yaml\n  - pvc.yaml\n")
+    (home / "prod").mkdir()
+    (home / "prod" / "externalsecret-okta.yaml").write_text("kind: ExternalSecret\n")
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d",
+                           "base_files": ["prod/externalsecret-okta.yaml"]}])
+    github = FakeGitHub()
+    _run(home, stack, github=github, merge_setup_prs=True)
+    files = github.repos["acme/d"]
+    assert files["k8s/base/externalsecret-okta.yaml"] == "kind: ExternalSecret\n"
+    kust = yaml.safe_load(files["k8s/base/kustomization.yaml"])
+    assert kust["resources"] == ["deployment.yaml", "pvc.yaml", "externalsecret-okta.yaml"]
+    github.calls.clear()
+    _run(home, stack, github=github, merge_setup_prs=True)
+    assert not [c for c in github.calls if c.startswith("push")]                      # a rerun is quiet
+
+
+def test_base_files_without_an_upstream_kustomization_get_one(home):
+    _upstream(home)
+    (home / "es.yaml").write_text("kind: ExternalSecret\n")
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d",
+                           "base_files": ["es.yaml"]}])
+    github = FakeGitHub()
+    _run(home, stack, github=github, merge_setup_prs=True)
+    kust = yaml.safe_load(github.repos["acme/d"]["k8s/base/kustomization.yaml"])
+    assert kust["resources"] == ["deployment.yaml", "pvc.yaml", "es.yaml"]
+
+
+def test_a_base_file_may_not_replace_the_upstreams_own(home):
+    _upstream(home)
+    (home / "pvc.yaml").write_text("kind: PersistentVolumeClaim\n")
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d",
+                           "base_files": ["pvc.yaml"]}])
+    with pytest.raises(ToolError, match="would replace"):
+        _run(home, stack, github=FakeGitHub(), merge_setup_prs=True)
+
+
+def test_base_files_need_a_deploy_repo(home):
+    with pytest.raises(Exception, match="base_files"):
+        _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "base_files": ["es.yaml"]}])

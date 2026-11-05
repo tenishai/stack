@@ -117,6 +117,11 @@ class App(BaseModel):
     # no tag (ghcr.io/example/app). `stack upgrade` copies `<source_image>:<tag
     # of image:>` into the install registry when the digest isn't there yet.
     source_image: str = ""
+    # Files of the install's own (relative to the stack file) that go into the
+    # deploy repo's k8s/base beside the upstream's, listed in its kustomization
+    # so Gojira keeps them: an ExternalSecret naming this install's vault path,
+    # say. The upstream can't know them; a later install must not drop them.
+    base_files: list[str] = []
 
     @field_validator("configmaps", "secrets", mode="before")
     @classmethod
@@ -136,6 +141,12 @@ class App(BaseModel):
             raise ValueError(f"{self.name}: contract: is for a deploy_repo the installer writes; edit {self.repo}'s gojira.yaml instead")
         if self.source_image and not self.deploy_repo:
             raise ValueError(f"{self.name}: source_image: is for an image app (set image: and deploy_repo:)")
+        if self.base_files and not self.deploy_repo:
+            raise ValueError(f"{self.name}: base_files: go into a deploy_repo the installer writes; "
+                             f"add them to {self.repo}'s k8s/base instead")
+        names = [Path(f).name for f in self.base_files]
+        if len(names) != len(set(names)):
+            raise ValueError(f"{self.name}: base_files: two files share a name: {names}")
         if self.source_image and ("@" in self.source_image or ":" in self.source_image.split("/")[-1]):
             raise ValueError(f"{self.name}: source_image: is a repo ref with no tag or digest; "
                              "the tag comes from image:")
