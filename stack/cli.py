@@ -3,6 +3,7 @@
     stack install examples/dogfood.yaml                # waits for a person on each setup PR
     stack install examples/dogfood.yaml --merge-setup-prs   # a first install of repos you own
     stack check examples/dogfood.yaml                  # parse the file, resolve nothing
+    stack upgrade examples/dogfood.yaml [app …]        # converge changed image: pins (stack#12)
 
 Needs on PATH: kubectl (on the install's context), gh (logged in), and for a
 stack with `bootstrap: cabal`, a `cbl` (--cbl, or $STACK_CBL). Repos named
@@ -31,13 +32,13 @@ def _shed_pythonpath() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _shed_pythonpath()
-    from stack.clients import CblCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
+    from stack.clients import CblCLI, CraneCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
     from stack.model import Stack
     from stack.steps import Clients, Installer, Options
 
     p = argparse.ArgumentParser(prog="stack")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("install", "check"):
+    for name in ("install", "check", "upgrade"):
         s = sub.add_parser(name)
         s.add_argument("stack_file")
     s = sub.choices["install"]
@@ -46,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--repos", default="", help="directory holding clones of the apps' repos")
     s.add_argument("--cbl", default=os.environ.get("STACK_CBL", ""), help="path to a cbl binary")
     s.add_argument("--cabal-port", type=int, default=17497)
+    s.add_argument("-v", "--verbose", action="store_true")
+    s = sub.choices["upgrade"]
+    s.add_argument("apps", nargs="*", help="apps to upgrade (default: every image app in the file)")
+    s.add_argument("--yes", action="store_true",
+                   help="the data_mount apps' PVCs are backed up; roll them")
+    s.add_argument("--merge-setup-prs", action="store_true",
+                   help="merge the regenerated setup PRs yourself")
     s.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(a, "verbose", False) else logging.WARNING,
@@ -76,6 +84,21 @@ def main(argv: list[str] | None = None) -> int:
     except ToolError as exc:
         print(f"cannot reach Gojira: {exc}", file=sys.stderr)
         return 1
+    if a.cmd == "upgrade":
+        try:
+            clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(), crane=CraneCLI())
+            opts = Options(stack_dir=path.parent, repo_root=path.parent,
+                           merge_setup_prs=a.merge_setup_prs, yes=a.yes)
+            report = Installer(stack, clients, opts).upgrade(a.apps)
+        except ToolError as exc:
+            print(f"\nstopped: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            gojira.close()
+        print(f"\ndone: {len(report.done)} steps"
+              + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+        return 0
+
     cabal = None
     cabal_app = next((x for x in stack.apps if x.bootstrap == "cabal"), None)
     if cabal_app is not None:

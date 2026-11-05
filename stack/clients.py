@@ -161,6 +161,7 @@ class KubectlClient(Protocol):
     def apply_file(self, path: str) -> str: ...
     def pods_ready(self, ns: str) -> tuple[int, int]: ...
     def logs_grep(self, ns: str, deploy: str, pattern: str) -> str | None: ...
+    def deployed_image(self, ns: str, deploy: str) -> str: ...
     def restart(self, ns: str, deploy: str) -> None: ...
     def port_forward(self, ns: str, target: str, local: int, remote: int) -> subprocess.Popen: ...
 
@@ -228,6 +229,10 @@ class KubectlCLI:
         m = re.search(pattern, out)
         return m.group(1) if m else None
 
+    def deployed_image(self, ns, deploy) -> str:
+        return self._k("-n", ns, "get", "deploy", deploy, "-o",
+                       "jsonpath={.spec.template.spec.containers[0].image}", check=False).strip()
+
     def restart(self, ns, deploy) -> None:
         self._k("-n", ns, "rollout", "restart", f"deploy/{deploy}")
         self._k("-n", ns, "rollout", "status", f"deploy/{deploy}", "--timeout=300s")
@@ -244,6 +249,8 @@ class GitHubClient(Protocol):
     def repo_exists(self, repo: str) -> bool: ...
     def create_repo(self, repo: str) -> None: ...
     def push_files(self, repo: str, files: dict[str, str], message: str) -> int: ...
+    def read_file(self, repo: str, path: str) -> str: ...
+    def open_pr(self, repo: str, files: dict[str, str], title: str, body: str, branch: str) -> str: ...
     def pr_state(self, pr_url: str) -> str: ...
     def merge_pr(self, pr_url: str) -> None: ...
     def dispatch(self, repo: str, workflow: str) -> None: ...
@@ -294,6 +301,35 @@ class GhCLI:
                 _run([*git, "push", "-q", "-u", "origin", "HEAD"])
             return changed
 
+    def read_file(self, repo, path) -> str:
+        out = _run(["gh", "api", f"repos/{repo}/contents/{path}", "--jq", ".content"])
+        return base64.b64decode(out).decode()
+
+    def open_pr(self, repo, files, title, body, branch) -> str:
+        """A PR carrying exactly `files` on `branch`, opened or found. A rerun
+        finds the open PR and answers its URL; the branch is force-pushed so
+        the PR always shows the latest content."""
+        import tempfile
+        existing = json.loads(_run(["gh", "pr", "list", "-R", repo, "--head", branch,
+                                    "--state", "open", "--json", "url"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            _run(["gh", "repo", "clone", repo, tmp, "--", "--quiet"])
+            git = ["git", "-C", tmp]
+            _run([*git, "checkout", "-q", "-B", branch])
+            for rel, content in files.items():
+                target = os.path.join(tmp, rel)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w") as fh:
+                    fh.write(content)
+                _run([*git, "add", "--", rel])
+            _run([*git, "commit", "-q", "-s", "-m", title])
+            _run([*git, "push", "-q", "-f", "-u", "origin", branch])
+            if existing:
+                return existing[0]["url"]
+            out = _run(["gh", "pr", "create", "-R", repo, "--head", branch,
+                        "--title", title, "--body", body])
+            return out.strip().splitlines()[-1]
+
     def pr_state(self, pr_url) -> str:
         repo, num = self._split(pr_url)
         out = _run(["gh", "pr", "view", num, "-R", repo, "--json", "state,mergedAt"])
@@ -314,6 +350,30 @@ class GhCLI:
         if not rows:
             return "none", ""
         return rows[0]["status"], rows[0].get("conclusion") or ""
+
+
+# --- crane (registry-to-registry, no daemon) ---------------------------------
+
+
+class CraneClient(Protocol):
+    def digest(self, ref: str) -> str: ...
+    def copy(self, src: str, dst: str) -> None: ...
+
+
+class CraneCLI:
+    """crane resolves digests and copies images between registries without a
+    docker daemon; its auth comes from the operator's own docker credential
+    helpers (`gcloud auth configure-docker <host>` for Artifact Registry)."""
+
+    def __init__(self):
+        if not shutil.which("crane"):
+            raise ToolError("crane is not on PATH (brew install crane); `stack upgrade` copies images with it")
+
+    def digest(self, ref) -> str:
+        return _run(["crane", "digest", ref]).strip()
+
+    def copy(self, src, dst) -> None:
+        _run(["crane", "cp", src, dst], timeout=600)
 
 
 # --- cabal (through its CLI, against a port-forward) ------------------------

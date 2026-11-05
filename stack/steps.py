@@ -23,6 +23,14 @@ Secret values are resolved in step 5, from `Source`s, and go straight into
 kubectl; they are never logged. `generate:` values are made once and kept in
 a 600 file beside the stack file so a rerun reuses them (a second run must not
 rotate a key the running app already holds).
+
+`stack upgrade` (stack#12) converges a changed stack file onto a running
+install, one image app at a time: copy the release image into the install
+registry if its digest isn't there (crane, from `source_image:`), land the
+one-line digest pin on the deploy repo (a PR someone merges, or a direct
+push, per the file's `upgrade_gate`), press provision, let the setup PR
+settle, and wait until the deployment runs the new digest. An app that
+carries a `data_mount` is refused without --yes: back up the PVC first.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import secrets as _secrets
 import time
 from dataclasses import dataclass, field
@@ -37,7 +46,15 @@ from pathlib import Path
 
 import yaml
 
-from stack.clients import AppRow, CabalClient, GitHubClient, GojiraClient, KubectlClient, ToolError
+from stack.clients import (
+    AppRow,
+    CabalClient,
+    CraneClient,
+    GitHubClient,
+    GojiraClient,
+    KubectlClient,
+    ToolError,
+)
 from stack.model import App, Source, Stack
 
 log = logging.getLogger("stack")
@@ -45,6 +62,18 @@ log = logging.getLogger("stack")
 ACTIVE, AWAITING_PR, FAILED = "active", "awaiting_pr", "failed"
 WORKFLOW = "gojira-ci.yaml"
 BOOTSTRAP_CODE = r"code=([A-Z0-9]{6})"
+IMAGE_LINE = re.compile(r"(?m)^image:.*$")
+DIGEST = re.compile(r"@(sha256:[0-9a-f]{64})")
+
+
+def ref_parts(image: str) -> tuple[str, str, str]:
+    """`repo[:tag][@sha256:…]` split into (repo, tag, digest), empties allowed."""
+    head, _, digest = image.partition("@")
+    if ":" in head.split("/")[-1]:
+        repo, _, tag = head.rpartition(":")
+    else:
+        repo, tag = head, ""
+    return repo, tag, digest
 
 
 @dataclass
@@ -53,6 +82,7 @@ class Clients:
     kubectl: KubectlClient
     github: GitHubClient
     cabal: CabalClient | None = None  # set once cabal is up and logged in
+    crane: CraneClient | None = None  # upgrades only; install never copies images
 
 
 @dataclass
@@ -66,6 +96,7 @@ class Options:
     bootstrap_seconds: float = 300.0     # cabal's code is good for five minutes
     iam_settle_seconds: float = 60.0     # a new deploy identity is usable after about this
     token_ttl_days: int = 90
+    yes: bool = False                    # upgrade: the data_mount backup gate was answered
     say: object = print
 
 
@@ -354,6 +385,136 @@ class Installer:
             time.sleep(self.o.poll_seconds)
         self.c.cabal.login(code)
         self.report.note(f"{app.name}: restarted, operator logged in with the fresh code", self.o.say)
+
+    # --- upgrade (stack#12) ---------------------------------------------------
+
+    def upgrade(self, names: list[str]) -> Report:
+        say = self.o.say
+        unknown = sorted(set(names) - {a.name for a in self.stack.apps})
+        if unknown:
+            raise ToolError(f"not in the stack file: {', '.join(unknown)}")
+        for app in self.stack.apps:
+            if names and app.name not in names:
+                continue
+            say(f"== {app.name}")
+            self.upgrade_app(app)
+        return self.report
+
+    def upgrade_app(self, app: App) -> None:
+        if not app.deploy_repo:
+            self.report.note(f"{app.name}: built from source (no deploy_repo), upgrade skipped", self.o.say)
+            return
+        desired = self.ensure_mirrored(app)
+        text = self.c.github.read_file(app.deploy_repo, "gojira.yaml")
+        m = IMAGE_LINE.search(text)
+        if not m:
+            raise ToolError(f"{app.name}: no image: line in {app.deploy_repo}'s gojira.yaml")
+        current = (DIGEST.search(m.group(0)) or [None, ""])[1]
+        if current == desired:
+            self.report.note(f"{app.name}: already at {desired[:19]}…, nothing to do", self.o.say)
+            return
+        doc = yaml.safe_load(text) or {}
+        if doc.get("data_mount") and not self.o.yes:
+            pvc = (doc["data_mount"] or {}).get("pvc", "?")
+            raise ToolError(f"{app.name}: carries data_mount (pvc {pvc}) — back it up first, "
+                            "then rerun with --yes")
+        self.land_pin(app, text, current, desired)
+        # The pin's own push CI completes first — it fails the contract check
+        # by design (finding #20's guard: the workflow still carries the old
+        # contract sha). Let it finish so the next run wait_rolled watches is
+        # the provision's own deploy, whatever its outcome here.
+        self.wait_run(app)
+        row = next((r for r in self.c.gojira.apps() if r.name == app.name), None)
+        if row is None:
+            raise ToolError(f"{app.name}: not connected on this Gojira; run `stack install` first")
+        self.c.gojira.provision(row.id)
+        row = self.wait_provisioned(self.c.gojira.app(row.id))
+        row = self.settle_setup_pr(app, row)
+        if row.status == FAILED:
+            raise ToolError(f"{app.name}: provision failed; see the app's page on Gojira")
+        self.wait_rolled(app, desired)
+        self.report.note(f"{app.name}: upgraded {current[:19] + '…' if current else '(unpinned)'}"
+                         f" -> {desired[:19]}…", self.o.say)
+
+    def ensure_mirrored(self, app: App) -> str:
+        """The digest of the stack file's `image:`, copied in from
+        `source_image:` when the install registry doesn't hold it yet."""
+        if self.c.crane is None:
+            raise ToolError("upgrade resolves and copies images with crane, and none is configured")
+        repo, tag, pinned = ref_parts(app.image)
+        if not tag and not pinned:
+            raise ToolError(f"{app.name}: image: needs a tag (or @digest) to upgrade to")
+        ref = f"{repo}:{tag}" if tag else f"{repo}@{pinned}"
+        try:
+            digest = self.c.crane.digest(ref)
+        except ToolError:
+            if not app.source_image:
+                raise ToolError(f"{app.name}: {ref} is not in the install registry and the app names "
+                                "no source_image: to copy it from") from None
+            if not tag:
+                raise ToolError(f"{app.name}: copying from source_image needs a tag on image:") from None
+            self.c.crane.copy(f"{app.source_image}:{tag}", ref)
+            self.report.note(f"{app.name}: copied {app.source_image}:{tag} into the install registry",
+                             self.o.say)
+            digest = self.c.crane.digest(ref)
+        if pinned and digest != pinned:
+            raise ToolError(f"{app.name}: {ref} resolves to {digest[:19]}… but the stack file pins "
+                            f"{pinned[:19]}… — the tag moved, or the pin is stale")
+        return digest
+
+    def land_pin(self, app: App, text: str, current: str, desired: str) -> None:
+        """The one-line digest bump on the deploy repo, by the file's gate."""
+        repo, tag, _ = ref_parts(app.image)
+        line = f"image: {repo}@{desired}   # {tag or desired[:19]}, pinned by stack upgrade"
+        new_text = IMAGE_LINE.sub(line.replace("\\", "\\\\"), text, count=1)
+        title = f"upgrade {app.name} to {tag or desired[:19]}"
+        if self.stack.upgrade_gate == "push":
+            self.c.github.push_files(app.deploy_repo, {"gojira.yaml": new_text}, title)
+            self.report.note(f"{app.name}: pin pushed to {app.deploy_repo}", self.o.say)
+            return
+        body = (f"Opened by `stack upgrade`: {current or '(unpinned)'} -> {desired}.\n\n"
+                "The push CI on merge fails the contract check by design; the provision "
+                "that follows regenerates the workflow.")
+        url = self.c.github.open_pr(app.deploy_repo, {"gojira.yaml": new_text}, title, body,
+                                    branch=f"upgrade/{app.name}-{desired[7:19]}")
+        self.o.say(f"  {app.name}: waiting for someone to merge {url}")
+        self.report.waited_on.append(url)
+        deadline = time.monotonic() + self.o.pr_wait_seconds
+        state = self.c.github.pr_state(url)
+        while state == "open":
+            if time.monotonic() > deadline:
+                raise ToolError(f"{app.name}: {url} still open after {self.o.pr_wait_seconds:.0f}s")
+            time.sleep(self.o.poll_seconds)
+            state = self.c.github.pr_state(url)
+        if state != "merged":
+            raise ToolError(f"{app.name}: the pin PR {url} is {state}")
+        self.report.note(f"{app.name}: pin merged ({url})", self.o.say)
+
+    def wait_rolled(self, app: App, digest: str) -> None:
+        """Done when the deployment runs the new digest and its pods are ready
+        — the receipt that matters, not a green run. A deploy run that started
+        after the pin and completed without success fails fast; the pin push's
+        own contract-check failure (expected, finding #20's guard) never
+        started after the provision, so it doesn't trip this."""
+        deadline = time.monotonic() + self.o.rollout_seconds
+        saw_running = False
+        while True:
+            image = self.c.kubectl.deployed_image(app.namespace, app.name)
+            ready, total = self.c.kubectl.pods_ready(app.namespace)
+            if digest in image and total and ready == total:
+                self.report.note(f"{app.name}: rolled, {ready}/{total} pods on {digest[:19]}…", self.o.say)
+                return
+            status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
+            if status in ("queued", "in_progress"):
+                saw_running = True
+            elif saw_running and status == "completed" and conclusion != "success":
+                raise ToolError(f"{app.name}: the deploy run failed; read "
+                                f"https://github.com/{app.connected_repo}/actions")
+            if time.monotonic() > deadline:
+                raise ToolError(f"{app.name}: pods not on {digest[:19]}… after "
+                                f"{self.o.rollout_seconds:.0f}s; see "
+                                f"https://github.com/{app.connected_repo}/actions")
+            time.sleep(self.o.poll_seconds)
 
     # --- values -------------------------------------------------------------
 
