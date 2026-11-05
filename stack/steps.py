@@ -234,7 +234,37 @@ class Installer:
                                 + yaml.safe_dump(doc, sort_keys=False)}
         for path in sorted(p for p in base.iterdir() if p.is_file()):
             files[f"k8s/base/{path.name}"] = path.read_text()
+        if app.base_files:
+            self._add_base_files(app, files)
         return files
+
+    def _add_base_files(self, app: App, files: dict[str, str]) -> None:
+        """The install's own files beside the upstream's, each listed in the
+        base kustomization: Gojira keeps only the resources a kustomization
+        already names (preserve_resources), so a file that isn't listed would
+        sit in the repo and leave the build."""
+        names = []
+        for rel in app.base_files:
+            src = Path(rel).expanduser()
+            src = src if src.is_absolute() else self.o.stack_dir / src
+            if not src.is_file():
+                raise ToolError(f"{app.name}: base file {rel} not found at {src}")
+            key = f"k8s/base/{src.name}"
+            if key in files:
+                raise ToolError(f"{app.name}: base file {src.name} would replace {app.repo}'s own; rename it")
+            files[key] = src.read_text()
+            names.append(src.name)
+        kust_key = "k8s/base/kustomization.yaml"
+        if kust_key in files:
+            doc = yaml.safe_load(files[kust_key]) or {}
+        else:
+            doc = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization",
+                   "resources": sorted(k.split("/")[-1] for k in files
+                                       if k.startswith("k8s/base/") and k.endswith((".yaml", ".yml"))
+                                       and k.split("/")[-1] not in names)}
+        resources = list(doc.get("resources") or [])
+        doc["resources"] = resources + [n for n in names if n not in resources]
+        files[kust_key] = yaml.safe_dump(doc, sort_keys=False)
 
     def connect(self, app: App) -> AppRow:
         for row in self.c.gojira.apps():

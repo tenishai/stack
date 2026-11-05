@@ -70,6 +70,17 @@ pushed directly (it exists for exactly this content); a rerun with identical
 content pushes nothing. Your deploy identities must be able to read the image's
 registry; a private Artifact Registry wants `roles/artifactregistry.reader`.
 
+Files only your install knows about, such as an ExternalSecret naming your own
+vault path, go in `base_files:` (paths relative to the stack file). The
+installer writes each one into the deploy repo's `k8s/base` and lists it in
+that directory's kustomization; Gojira keeps only resources a kustomization
+names, so a file that isn't listed would sit in the repo and leave the build.
+A base file may not share a name with one of the upstream's own.
+
+```yaml
+    base_files: [prod/kobo/externalsecret-okta.yaml]
+```
+
 ## Upgrading
 
 `stack upgrade stack.yaml [app …]` converges a changed `image:` onto a running
