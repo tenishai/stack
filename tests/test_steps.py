@@ -397,3 +397,23 @@ def test_a_base_file_may_not_replace_the_upstreams_own(home):
 def test_base_files_need_a_deploy_repo(home):
     with pytest.raises(Exception, match="base_files"):
         _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "base_files": ["es.yaml"]}])
+
+
+def test_install_can_name_its_apps(home):
+    """Adding one app to a live install touches only that app: the others'
+    repos are not connected, provisioned or rewritten."""
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}, {"name": "kobo", "repo": "o/kobo"}])
+    gojira, github = FakeGojira(), FakeGitHub()
+    clients = Clients(gojira=gojira, kubectl=FakeKubectl(), github=github)
+    o = Options(stack_dir=home, repo_root=home / "repos", poll_seconds=0, pr_wait_seconds=0.5,
+                rollout_seconds=0.5, say=lambda _: None, merge_setup_prs=True)
+    Installer(stack, clients, o).install(["kobo"])
+    assert list(gojira.connected) == ["kobo"]
+
+
+def test_install_refuses_an_app_the_file_does_not_name(home):
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo"}])
+    clients = Clients(gojira=FakeGojira(), kubectl=FakeKubectl(), github=FakeGitHub())
+    o = Options(stack_dir=home, repo_root=home / "repos", say=lambda _: None)
+    with pytest.raises(ToolError, match="not in the stack file: bab"):
+        Installer(stack, clients, o).install(["bab"])

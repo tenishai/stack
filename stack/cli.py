@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         s = sub.add_parser(name)
         s.add_argument("stack_file")
     s = sub.choices["install"]
+    s.add_argument("apps", nargs="*", help="install only these apps (default: every app in the file)")
     s.add_argument("--merge-setup-prs", action="store_true",
                    help="merge every setup PR yourself (a first install of repos you own)")
     s.add_argument("--repos", default="", help="directory holding clones of the apps' repos")
@@ -101,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cabal = None
     cabal_app = next((x for x in stack.apps if x.bootstrap == "cabal"), None)
+    if cabal_app is not None and a.apps and cabal_app.name not in a.apps \
+            and not any(x.needs_cabal() for x in stack.apps if x.name in a.apps):
+        cabal_app = None  # the named apps neither are cabal nor mint on it
     if cabal_app is not None:
         if not a.cbl:
             print("this stack bootstraps cabal: pass --cbl <path to cbl> (or STACK_CBL)", file=sys.stderr)
@@ -112,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     opts = Options(stack_dir=path.parent, repo_root=Path(a.repos).expanduser() if a.repos else path.parent,
                    merge_setup_prs=a.merge_setup_prs)
     try:
-        report = Installer(stack, clients, opts).install()
+        report = Installer(stack, clients, opts).install(a.apps)
     except ToolError as exc:
         print(f"\nstopped: {exc}", file=sys.stderr)
         return 1

@@ -117,11 +117,20 @@ class Installer:
 
     # --- the whole run ------------------------------------------------------
 
-    def install(self) -> Report:
+    def install(self, names: list[str] | None = None) -> Report:
+        """Every app in the file's order, or only the named ones (still in the
+        file's order): adding one app to a live install must not rewrite the
+        others' deploy repos from whatever their upstream clones hold today."""
         say = self.o.say
+        names = names or []
+        unknown = sorted(set(names) - {a.name for a in self.stack.apps})
+        if unknown:
+            raise ToolError(f"not in the stack file: {', '.join(unknown)}")
         say("== cluster")
         self.register_cluster()
         for app in self.stack.apps:
+            if names and app.name not in names:
+                continue
             say(f"== {app.name}")
             self.install_app(app)
         return self.report
