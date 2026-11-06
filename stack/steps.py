@@ -148,10 +148,9 @@ class Installer:
     # --- one app ------------------------------------------------------------
 
     def install_app(self, app: App) -> AppRow:
-        if app.deploy_repo:
-            self.ensure_deploy_repo(app)
+        changed = self.ensure_deploy_repo(app) if app.deploy_repo else 0
         self.apply_cluster_objects(app)
-        row = self.connect(app)
+        row = self.connect(app, contract_changed=bool(changed))
         row = self.wait_provisioned(row)
         if row.status == FAILED:
             # The first minute after an install is eventually consistent on
@@ -198,7 +197,7 @@ class Installer:
             out = self.c.kubectl.apply_file(str(path))
             self.report.note(f"{app.name}: applied {rel} ({out.split()[-1] if out else 'ok'})", self.o.say)
 
-    def ensure_deploy_repo(self, app: App) -> None:
+    def ensure_deploy_repo(self, app: App) -> int:
         """The repo Gojira connects when the app is a published image: created
         if missing, holding exactly a gojira.yaml that names the image and the
         k8s/base the upstream keeps. Idempotent: identical content pushes
@@ -212,6 +211,7 @@ class Installer:
         changed = self.c.github.push_files(app.deploy_repo, files, f"deploy {app.image}")
         self.report.note(f"{app.name}: deploy repo {app.deploy_repo} "
                          + (f"updated ({changed} files)" if changed else "current"), self.o.say)
+        return changed
 
     def deploy_repo_files(self, app: App) -> dict[str, str]:
         upstream = self.o.repo_root / app.repo.split("/")[1]
@@ -275,13 +275,18 @@ class Installer:
         doc["resources"] = resources + [n for n in names if n not in resources]
         files[kust_key] = yaml.safe_dump(doc, sort_keys=False)
 
-    def connect(self, app: App) -> AppRow:
+    def connect(self, app: App, contract_changed: bool = False) -> AppRow:
+        """An app already connected is provisioned again when it failed, or when
+        this run changed its deploy repo: the push's own CI fails the contract
+        check by design, and only a provision regenerates what deploys."""
         for row in self.c.gojira.apps():
             if row.name == app.name:
                 self.report.note(f"{app.name}: connected (app {row.id}, {row.status})", self.o.say)
-                if row.status == FAILED:
+                if row.status == FAILED or contract_changed:
                     self.c.gojira.provision(row.id)
-                    self.report.note(f"{app.name}: provision pressed again", self.o.say)
+                    why = "deploy repo changed" if contract_changed else "it had failed"
+                    self.report.note(f"{app.name}: provision pressed again ({why})", self.o.say)
+                    return self.c.gojira.app(row.id)
                 return row
         auto = app.auto_merge_setup_pr or self.o.merge_setup_prs
         row = self.c.gojira.connect(app.name, app.connected_repo, app.workload_class, app.environment,

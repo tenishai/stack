@@ -345,6 +345,26 @@ def test_a_deploy_repo_rerun_pushes_nothing(home):
     assert "cabal: deploy repo acme/cabal-deploy current" in "\n".join(lines)
 
 
+def test_a_changed_contract_on_a_live_app_is_provisioned_again(home):
+    """A rerun that changes the deploy repo (bab's BAB_PORT, 2026-11-06) must
+    press provision: the push's CI fails the contract check by design, and an
+    active app would otherwise never pick the change up."""
+    _upstream(home)
+    entry = {"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}
+    gojira, github = FakeGojira(), FakeGitHub()
+    _run(home, _stack(home, [entry]), gojira=gojira, github=github, merge_setup_prs=True)
+    assert gojira.app(1).status == "active"
+
+    gojira.calls.clear()
+    _run(home, _stack(home, [entry]), gojira=gojira, github=github, merge_setup_prs=True)
+    assert not [c for c in gojira.calls if c.startswith("provision")]       # unchanged: left alone
+
+    entry["contract"] = {"env": {"PORT": "8080"}}
+    _, _, lines = _run(home, _stack(home, [entry]), gojira=gojira, github=github, merge_setup_prs=True)
+    assert [c for c in gojira.calls if c.startswith("provision")] == ["provision:1"]
+    assert "cabal: provision pressed again (deploy repo changed)" in "\n".join(lines)
+
+
 def test_a_deploy_repo_without_the_upstream_clone_stops_with_the_path(home):
     stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
     with pytest.raises(ToolError, match="has no k8s/base"):
