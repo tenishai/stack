@@ -110,6 +110,19 @@ def available_tags(app: App, crane: CraneClient, limit: int = 20) -> list[str]:
     return tags[:limit]
 
 
+def data_pvc(app: App, github) -> str:
+    """The PVC the app's deploy repo mounts (`data_mount.pvc`), or "" — what
+    the backup gate is about, so the page can name it instead of asking
+    "if it has one"."""
+    if not app.deploy_repo:
+        return ""
+    try:
+        doc = __import__("yaml").safe_load(github.read_file(app.deploy_repo, "gojira.yaml")) or {}
+    except (ToolError, Exception):
+        return ""
+    return str((doc.get("data_mount") or {}).get("pvc") or "")
+
+
 def set_image(target: Target, app_name: str, tag: str, crane: CraneClient) -> tuple[str, str]:
     """Rewrite the stack file's `image:` line for `app_name` to `<repo>:<tag>@<digest>`,
     the digest read from `source_image:<tag>` — the receipt the file keeps, and what

@@ -160,26 +160,34 @@ def test_pick_a_release_pins_it_in_the_stack_file_and_runs_that_app(tmp_path):
         "    image: r/agent-images/kobo@sha256:" + "a" * 64 + "   # v1, by hand\n"
         "    source_image: ghcr.io/o/kobo\n"
         "    deploy_repo: o/kobo-deploy\n"
-        "  - {name: litellm, repo: o/litellm, image: r/agent-images/litellm:1, deploy_repo: o/litellm-deploy}\n"
+        "  - {name: litellm, repo: o/litellm, image: r/agent-images/litellm:1, deploy_repo: o/litellm-deploy,\n"
+        "     source_image: ghcr.io/o/litellm}\n"
     )
     crane = FakeCrane(digests={"ghcr.io/o/kobo:v2.0": "sha256:" + "b" * 64})
     crane.tags_by["ghcr.io/o/kobo"] = ["latest", "v1.0", "v2.0", "sha-abc", "v1.9"]
+    crane.tags_by["ghcr.io/o/litellm"] = ["1.0", "1.1"]
     calls = []
 
     def perform(target, action, apps, **kw):
         calls.append((action, apps, kw["yes"], kw["merge_setup_prs"], kw["merge_pins"]))
         return Report()
 
+    from tests.fakes import FakeGitHub
+
+    github = FakeGitHub(repos={"o/kobo-deploy": {"gojira.yaml": "image: x\ndata_mount:\n  pvc: kobo-data\n"},
+                               "o/litellm-deploy": {"gojira.yaml": "image: x\n"}})
     runner = Runner()
     site = TestClient(make_app(tmp_path / "p.yaml", runner, perform=perform, preflight=lambda s, t: [],
-                               crane=lambda env: crane))
+                               crane=lambda env: crane, github=lambda env: github))
     site.post("/profiles", data={"name": "t", "stack_file": str(stack_file)})
     page = site.get("/p/t").text
-    assert 'hx-get="/p/t/tags/kobo"' in page and "set <span class=\"mono\">source_image:</span>" in page
+    assert 'hx-get="/p/t/tags/kobo"' in page and 'hx-get="/p/t/tags/litellm"' in page
     frag = site.get("/p/t/tags/kobo").text
+    assert "kobo-data</span> is backed up" in frag                    # the gate names the PVC
     assert frag.index('value="v2.0"') < frag.index('value="v1.9"') < frag.index('value="v1.0"')
     assert "latest" not in frag and "sha-abc" not in frag and "now pinned by digest only" in frag
-    assert site.get("/p/t/tags/litellm").status_code == 200 and "no source_image" in site.get("/p/t/tags/litellm").text
+    lite = site.get("/p/t/tags/litellm").text
+    assert 'value="1.1"' in lite and "backed up" not in lite           # no PVC: no gate to tick
     # an unpublished tag is refused before the file changes
     r = site.post("/p/t/upgrade-to", data={"app": "kobo", "tag": "v9"})
     assert r.status_code == 422 and "manifest unknown" in r.text and "a" * 64 in stack_file.read_text()

@@ -9,7 +9,7 @@
     {% for t in tags %}<option value="{{ t }}" {% if t == current %}selected{% endif %}>{{ t }}{% if t == current %} (current){% endif %}</option>{% endfor %}
   </select>
   <button type="submit" class="quiet">Upgrade to</button>
-  <label><input type="checkbox" name="yes" value="true"> its data (a PVC, if it has one) is backed up</label>
+  {% if pvc %}<label><input type="checkbox" name="yes" value="true"> <span class="mono">{{ pvc }}</span> is backed up (its data outlives the pod; the upgrade is refused until you say so)</label>{% endif %}
   {% if not current %}<span class="muted">now pinned by digest only</span>{% endif %}
 </form>
 {% endif %}

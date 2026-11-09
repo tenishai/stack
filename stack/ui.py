@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from stack import preflight as _preflight
 from stack import runs as _runs
-from stack.clients import CraneCLI, ToolError
+from stack.clients import CraneCLI, GhCLI, ToolError
 from stack.model import Stack
 from stack.profiles import Profile, Profiles
 from stack.steps import ref_parts
@@ -30,7 +30,7 @@ ACTIONS = ("install", "upgrade")
 
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
              perform: Callable = _runs.perform, preflight: Callable = _preflight.preflight,
-             crane: Callable = CraneCLI) -> FastAPI:
+             crane: Callable = CraneCLI, github: Callable = GhCLI) -> FastAPI:
     app = FastAPI(title="stack")
     runner = runner or _runs.Runner()
 
@@ -128,12 +128,14 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         app_ = next((a for a in stack.apps if a.name == app_name), None) if stack else None
         if app_ is None:
             return HTMLResponse(error or f"no app {app_name!r}", status_code=404)
+        env = profile.target().env
         try:
-            tags = _runs.available_tags(app_, crane(profile.target().env))
+            tags = _runs.available_tags(app_, crane(env))
         except ToolError as exc:
-            return page("_tags.html", request, profile=profile, app=app_, tags=[], current="", error=str(exc))
+            return page("_tags.html", request, profile=profile, app=app_, tags=[], current="", pvc="", error=str(exc))
         _, current, _ = ref_parts(app_.image)
-        return page("_tags.html", request, profile=profile, app=app_, tags=tags, current=current, error="")
+        return page("_tags.html", request, profile=profile, app=app_, tags=tags, current=current,
+                    pvc=_runs.data_pvc(app_, github(env)), error="")
 
     @app.post("/p/{name}/upgrade-to")
     def upgrade_to(name: str, app_name: str = Form(alias="app"), tag: str = Form(), yes: bool = Form(False)):
