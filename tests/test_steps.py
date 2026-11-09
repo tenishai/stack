@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from stack.clients import ToolError
+from stack.clients import AppRow, ToolError
 from stack.model import Stack
 from stack.steps import Clients, Installer, Options
 from tests.fakes import FakeCabal, FakeGitHub, FakeGojira, FakeKubectl
@@ -146,6 +146,24 @@ def test_a_merged_pr_is_synced_and_an_empty_namespace_is_deployed(home):
     _, report, _ = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github)
     assert "dispatch:o/litellm:gojira-ci.yaml" in github.calls
     assert "litellm: deploy dispatched (namespace was empty)" in report.done
+
+
+def test_an_app_asked_for_by_name_is_provisioned_again_even_unchanged(home):
+    """`stack install file bab` on a live, unchanged bab: the contract on the
+    repo may carry what only a provision acts on (2026-11-09, an identity:
+    line), so a named app is converged. The whole-file install still leaves
+    an active, unchanged app alone."""
+    stack = _stack(home, [{"name": "bab", "repo": "o/bab"}, {"name": "kobo", "repo": "o/kobo"}])
+    rows = [AppRow(id=1, name="bab", status="active"), AppRow(id=2, name="kobo", status="active")]
+    gojira = FakeGojira(apps=rows)
+    inst = Installer(stack, Clients(gojira=gojira, kubectl=FakeKubectl(), github=FakeGitHub()),
+                     Options(stack_dir=home, repo_root=home / "repos", poll_seconds=0, say=lambda _: None))
+    inst.install(["bab"])
+    assert [c for c in gojira.calls if c.startswith("provision")] == ["provision:1"]
+    assert "bab: provision pressed again (asked for by name)" in inst.report.done
+    gojira.calls.clear()
+    inst.install()
+    assert not any(c.startswith("provision") for c in gojira.calls)
 
 
 def test_pods_present_but_a_failed_last_deploy_is_dispatched_again(home):
