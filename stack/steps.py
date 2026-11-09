@@ -355,12 +355,16 @@ class Installer:
         failed on "unable to acquire impersonated credentials"), so a failed
         first run is dispatched once more after the settle time."""
         _, total = self.c.kubectl.pods_ready(app.namespace)
-        if total:
+        status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
+        if total and conclusion != "failure":
             return
-        status, _ = self.c.github.last_run(app.connected_repo, WORKFLOW)
         if status not in ("queued", "in_progress"):
+            # Pods present but the last deploy failed: a provision that changed
+            # a platform fact (a repo variable, say) and no file leaves the
+            # workflow unrun, and what runs is still the old shape (2026-11-09).
+            why = "namespace was empty" if not total else "the last deploy had failed"
             self.c.github.dispatch(app.connected_repo, WORKFLOW)
-            self.report.note(f"{app.name}: deploy dispatched (namespace was empty)", self.o.say)
+            self.report.note(f"{app.name}: deploy dispatched ({why})", self.o.say)
         else:
             self.report.note(f"{app.name}: deploy already running", self.o.say)
         if self.wait_run(app) == "success":

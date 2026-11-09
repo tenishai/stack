@@ -148,6 +148,24 @@ def test_a_merged_pr_is_synced_and_an_empty_namespace_is_deployed(home):
     assert "litellm: deploy dispatched (namespace was empty)" in report.done
 
 
+def test_pods_present_but_a_failed_last_deploy_is_dispatched_again(home):
+    """An identity added to a live app: the provision set the repo variable
+    and changed no file, so nothing ran the workflow whose last run had
+    failed on that very variable (2026-11-09). The installer runs it."""
+    stack = _stack(home, [{"name": "bab", "repo": "o/bab"}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["bab"] = ("active", "")
+    kubectl = FakeKubectl(ready={"bab": (2, 2)})
+    github = FakeGitHub(runs={"o/bab": ("completed", "failure")})
+    _, report, _ = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github)
+    assert "dispatch:o/bab:gojira-ci.yaml" in github.calls
+    assert "bab: deploy dispatched (the last deploy had failed)" in report.done
+    # pods present and the last deploy fine: nothing to run
+    github = FakeGitHub(runs={"o/bab": ("completed", "success")})
+    _, report, _ = _run(home, stack, gojira=FakeGojira(), kubectl=kubectl, github=github)
+    assert not any(c.startswith("dispatch") for c in github.calls)
+
+
 def test_a_failed_provision_is_tried_once_more_then_stops_the_run_by_name(home):
     """Seconds after an install Google is still catching up (a WIF provider
     the purge soft-deleted, gojira#117): the second provision is the one
