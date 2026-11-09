@@ -54,7 +54,7 @@ def _add(site, **fields):
 
 
 def test_a_profile_shows_its_stack_file_and_stores_only_paths(site):
-    assert "No profiles yet" in site.get("/").text
+    assert "none yet" in site.get("/").text
     r = _add(site)
     assert r.status_code == 303 and r.headers["location"] == "/p/dogfood"
     page = site.get("/p/dogfood").text
@@ -65,7 +65,7 @@ def test_a_profile_shows_its_stack_file_and_stores_only_paths(site):
     assert 'class="env-dev"' in page and 'rail-idle' in page and "not checked" in page
     saved = site.profiles_path.read_text()
     assert "kubeconfig: ~/.kube-dogfood/config" in saved and "me@example.com" in saved
-    assert "dogfood" in site.get("/").text
+    assert 'class="env">dev</span>' in site.get("/").text   # the list wears each install's environment
     # a bad name is refused on the page, not with a traceback
     assert site.post("/profiles", data={"name": "my prod", "stack_file": "x.yaml"}).status_code == 422
     # a stack file that does not parse is one sentence on the profile page
@@ -86,7 +86,7 @@ def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     assert target.env["CLOUDSDK_CORE_ACCOUNT"] == "me@example.com"
     assert target.env["KUBECONFIG"].endswith(".kube-dogfood/config") and "~" not in target.env["KUBECONFIG"]
     page = site.get("/runs/1").text
-    assert "b-failed" in page
+    assert "b-failed" in page and "rail-fail" in page
     assert '<div class="line head"><span class="text">litellm</span>' in page
     assert "litellm: connected (app 1)" in page
     assert 'class="line fail"' in page and "stopped: litellm: provision failed" in page
@@ -100,6 +100,7 @@ def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     assert "done: 1 steps" in lines
     assert 'id="going" hx-swap-oob="true"></span>' in lines      # the header badge clears with the run
     assert site.get("/runs/2").text.count('id="going"') == 1       # the full page carries it once
+    assert 'class="env">dev</span>' in site.get("/runs/2").text and "rail-ok" in site.get("/runs/2").text
     assert "#2" in site.get("/p/dogfood").text and "install · kobo" in site.get("/p/dogfood").text
 
 
@@ -128,7 +129,7 @@ def test_one_run_at_a_time(tmp_path):
     _add(site)
     assert site.post("/p/dogfood/install", data={}, follow_redirects=False).status_code == 303
     second = site.post("/p/dogfood/install", data={"apps": ["kobo"]}, follow_redirects=False)
-    assert second.status_code == 409 and "/runs/1" in second.text
+    assert second.status_code == 409 and "/runs/1" in second.text and "a run is already going" in second.text
     assert site.post("/p/dogfood/check", follow_redirects=False).status_code == 409
     assert "run #1" in site.get("/p/dogfood").text and 'class="caution">Install all' not in site.get("/p/dogfood").text
     assert 'hx-get="/runs/1/lines"' in site.get("/runs/1").text   # still polling

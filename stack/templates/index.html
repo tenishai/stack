@@ -1,29 +1,53 @@
 {% extends "base.html" %}
 {% block title %}stack · profiles{% endblock %}
 {% block content %}
-<h1>Profiles</h1>
-<p class="muted">One per install. A profile is a name and paths: the stack file stays the truth about the
-install; the profile pins which kubeconfig and cloud account every call uses, so nothing depends on a shell export.</p>
+<div class="page-head">
+  <h1>Profiles</h1>
+  <p class="muted" style="margin:0">One per install. A profile is a name and paths: the stack file stays the truth about the
+  install; the profile pins which kubeconfig and cloud account every call uses, so nothing depends on a shell export.</p>
+</div>
 
-{% if profiles %}
-<table class="boxed">
-  <tr><th>Name</th><th>Stack file</th><th>Kubeconfig</th><th>Cloud account</th></tr>
-  {% for p in profiles %}
-  <tr>
-    <td><a href="/p/{{ p.name }}">{{ p.name }}</a></td>
-    <td class="mono">{{ p.stack_file }}</td>
-    <td class="mono">{{ p.kubeconfig or '(default)' }}</td>
-    <td class="mono">{{ p.cloud_account or '(default)' }}</td>
-  </tr>
-  {% endfor %}
-</table>
+{% if rows %}
+<section class="stage rail-main">
+  <div class="stage-head">
+    <div class="stage-meta">
+      <h2 class="stage-title">Installs <span class="badge b-info">{{ rows | length }}</span></h2>
+      <p class="stage-purpose">Open one to check it, upgrade an app or install.</p>
+    </div>
+  </div>
+  <div class="stage-body flush"><div class="table-wrap">
+  <table>
+    <thead><tr><th>Profile</th><th>Stack file</th><th>Cluster</th><th>Last run</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td class="app"><a href="/p/{{ r.profile.name }}">{{ r.profile.name }}</a>{% if r.env %} <span class="env">{{ r.env }}</span>{% endif %}</td>
+      <td class="mono">{{ r.profile.stack_file }}{% if r.error %}<span class="src err">{{ r.error }}</span>{% endif %}</td>
+      <td>{% if r.stack %}{{ r.stack.cluster.name }} <span class="muted">· {{ r.stack.apps | length }} apps</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if r.last %}<a href="/runs/{{ r.last.id }}">#{{ r.last.id }}</a> {{ r.last.kind }} <span class="badge b-{{ r.last.status }}">{{ r.last.status }}</span>{% else %}<span class="muted">none since stack ui started</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div></div>
+</section>
 {% else %}
-<p>No profiles yet.</p>
+<section class="stage rail-idle">
+  <div class="stage-head"><div class="stage-meta"><h2 class="stage-title">Installs <span class="badge b-idle">none yet</span></h2>
+  <p class="stage-purpose">No profiles yet. Add the first one below: a stack file and the paths every call is pinned to.</p></div></div>
+</section>
 {% endif %}
 
-<h2>Add a profile</h2>
-<div class="card">
-  {% if error %}<p class="err">{{ error }}</p>{% endif %}
-  {% include "_profile_form.html" %}
-</div>
+<section class="stage rail-idle">
+  <div class="stage-head">
+    <div class="stage-meta">
+      <h2 class="stage-title">Add a profile</h2>
+      <p class="stage-purpose">Paths only, never contents. Saved to the profiles file on this machine.</p>
+    </div>
+  </div>
+  <div class="stage-body">
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    {% include "_profile_form.html" %}
+  </div>
+</section>
 {% endblock %}

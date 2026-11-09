@@ -1,14 +1,21 @@
 {# The run's lines. While it runs, the block polls itself and swaps whole; a
    finished block carries no trigger, so polling stops with it. The header's
    badge rides along out of band, so it clears when the run does. #}
-{% if oob %}<span id="going" hx-swap-oob="true">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>{% endif %}
-<div id="lines" class="card"
+{% if oob %}<span id="going" hx-swap-oob="true">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>
+<span id="run-status" class="badge b-{{ run.status }}" hx-swap-oob="true">{{ run.status }}</span>{% endif %}
+<section id="lines" class="stage rail-{{ 'main' if run.status == 'running' else ('ok' if run.status == 'done' else 'fail') }}"
      {% if run.status == 'running' %}hx-get="/runs/{{ run.id }}/lines" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-  <p><span class="badge b-{{ run.status }}">{{ run.status }}</span>
-     {% if run.status == 'running' %}<span class="muted">{{ run.lines | length }} lines so far</span>{% endif %}</p>
+  <div class="stage-head">
+    <div class="stage-meta">
+      <h2 class="stage-title">Lines <span class="badge b-{{ run.status }}">{{ run.status }}</span>
+        {% if run.status == 'running' %}<span class="muted" style="font-weight:400;font-size:13px">{{ run.lines | length }} so far</span>{% endif %}</h2>
+    </div>
+  </div>
+  <div class="stage-body">
   {% for l in run.lines %}
   <div class="line {{ l.level }}"><span class="text">{{ l.text }}</span></div>
   {% else %}
-  <p class="muted">opening the hands on the install…</p>
+  <p class="muted" style="margin:0">opening the hands on the install…</p>
   {% endfor %}
-</div>
+  </div>
+</section>

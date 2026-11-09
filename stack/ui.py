@@ -72,15 +72,30 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     def load_profile(name: str) -> Profile | None:
         return Profiles.load(profiles_path).get(name)
 
+    def notice(request: Request, status_code: int, text: str, *, title: str = "Not done",
+               level: str = "fail", link: str = "", link_text: str = "") -> HTMLResponse:
+        """A refusal as a page of its own, not bare text: the words a test
+        checks are the words the operator reads."""
+        return page("notice.html", request, status_code=status_code, title=title, text=text, level=level,
+                    link=link, link_text=link_text)
+
     def stack_or_error(profile: Profile) -> tuple[Stack | None, str]:
         try:
             return Stack.load(profile.target().stack_file), ""
         except Exception as exc:  # yaml / pydantic / missing file: one sentence
             return None, f"{profile.stack_file}: {str(exc).splitlines()[0]}"
 
+    def index_rows():
+        rows = []
+        for p in Profiles.load(profiles_path).profiles:
+            stack, error = stack_or_error(p)
+            last = next((r for r in reversed(list(runner.runs.values())) if r.profile == p.name), None)
+            rows.append({"profile": p, "stack": stack, "error": error, "env": environment(stack), "last": last})
+        return rows
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        return page("index.html", request, profiles=Profiles.load(profiles_path).profiles, error="")
+        return page("index.html", request, rows=index_rows(), error="")
 
     @app.post("/profiles")
     def save_profile(request: Request, name: str = Form(), stack_file: str = Form(),
@@ -91,8 +106,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                               cloud_account=cloud_account.strip(), repos=repos.strip(), cbl=cbl.strip(),
                               env_file=env_file.strip())
         except ValueError as exc:
-            return page("index.html", request, profiles=Profiles.load(profiles_path).profiles,
-                        error=str(exc).splitlines()[0], status_code=422)
+            return page("index.html", request, rows=index_rows(), error=str(exc).splitlines()[0], status_code=422)
         book = Profiles.load(profiles_path)
         book.put(profile)
         book.save(profiles_path)
@@ -109,7 +123,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     def profile_page(name: str, request: Request):
         profile = load_profile(name)
         if profile is None:
-            return HTMLResponse(f"no profile {name!r}", status_code=404)
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
         stack, error = stack_or_error(profile)
         runs = [r for r in runner.runs.values() if r.profile == name]
         last_check = next((r for r in reversed(runs) if r.kind == "check"), None)
@@ -118,13 +132,13 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                     busy=runner.active())
 
     @app.post("/p/{name}/check")
-    def check(name: str):
+    def check(name: str, request: Request):
         profile = load_profile(name)
         if profile is None:
-            return HTMLResponse(f"no profile {name!r}", status_code=404)
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
         stack, error = stack_or_error(profile)
         if stack is None:
-            return HTMLResponse(error, status_code=422)
+            return notice(request, 422, error, link=f"/p/{name}", link_text=f"Back to {name}")
 
         def work(run: _runs.Run):
             section = None
@@ -140,15 +154,15 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             run.add("fail" if fails else "warn" if warns else "ok",
                     f"{fails} missing, {warns} to look at" if fails or warns else "nothing missing")
 
-        return _started(runner.start(name, "check", "preflight", work))
+        return _started(request, runner.start(name, "check", "preflight", work))
 
     @app.post("/p/{name}/install")
-    def start_install(name: str, apps: list[str] = Form([])):
+    def start_install(name: str, request: Request, apps: list[str] = Form([])):
         """Install the ticked apps, or every app. Upgrades go through the
         table's release picker only: one surface, one decision per app."""
         profile = load_profile(name)
         if profile is None:
-            return HTMLResponse(f"no profile {name!r}", status_code=404)
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
         target = profile.target()
 
         def work(run: _runs.Run):
@@ -156,7 +170,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             report = perform(target, "install", apps, merge_setup_prs=True, merge_pins=True, say=run.say)
             run.add("ok", f"done: {len(report.done)} steps")
 
-        return _started(runner.start(name, "install", ", ".join(apps) or "every app", work))
+        return _started(request, runner.start(name, "install", ", ".join(apps) or "every app", work))
 
     @app.get("/p/{name}/tags/{app_name}", response_class=HTMLResponse)
     def tags(name: str, app_name: str, request: Request):
@@ -177,27 +191,30 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                     pvc=_runs.data_pvc(app_, github(env)), busy=runner.active(), error="")
 
     @app.post("/p/{name}/upgrade-to")
-    def upgrade_to(name: str, app_name: str = Form(alias="app"), tag: str = Form(""), yes: bool = Form(False)):
+    def upgrade_to(name: str, request: Request, app_name: str = Form(alias="app"), tag: str = Form(""),
+                   yes: bool = Form(False)):
         """Pin the release in the stack file, then run the upgrade for that app."""
         profile = load_profile(name)
         if profile is None:
-            return HTMLResponse(f"no profile {name!r}", status_code=404)
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
         if runner.active():
-            return _started(None)
+            return _started(request, None)
         target = profile.target()
         stack, error = stack_or_error(profile)
         app_ = next((a for a in stack.apps if a.name == app_name), None) if stack else None
+        back = dict(link=f"/p/{name}", link_text=f"Back to {name}")
         if app_ is None:
-            return HTMLResponse(error or f"no app {app_name!r}", status_code=422)
+            return notice(request, 422, error or f"no app {app_name!r}", **back)
         # Every refusal comes before anything is written: a stack file that
         # pins what the cluster doesn't run is drift nobody decided on.
         if not tag:
-            return HTMLResponse(f"{app_name}: pick a release first", status_code=422)
+            return notice(request, 422, f"{app_name}: pick a release first", level="warn", **back)
         if tag == ref_parts(app_.image)[1]:
-            return HTMLResponse(f"{app_name}: already pinned to {tag}", status_code=422)
+            return notice(request, 422, f"{app_name}: already pinned to {tag}", level="warn", **back)
         pvc = _runs.data_pvc(app_, github(target.env))
         if pvc and not yes:
-            return HTMLResponse(f"{app_name}: {pvc} holds its data; tick the backup box first", status_code=422)
+            return notice(request, 422, f"{app_name}: {pvc} holds its data; tick the backup box first",
+                          level="warn", **back)
 
         def work(run: _runs.Run):
             old, new = _runs.set_image(target, app_name, tag, crane(target.env))   # refuses before writing
@@ -206,21 +223,24 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                              say=run.say)
             run.add("ok", f"done: {len(report.done)} steps")
 
-        return _started(runner.start(name, "upgrade", f"{app_name} to {tag}", work))
+        return _started(request, runner.start(name, "upgrade", f"{app_name} to {tag}", work))
 
-    def _started(run: _runs.Run | None):
+    def _started(request: Request, run: _runs.Run | None):
         if run is None:
             active = runner.active()
-            return HTMLResponse(f"a run is already going: <a href='/runs/{active.id}'>#{active.id} "
-                                f"{active.kind} on {active.profile}</a>", status_code=409)
+            return notice(request, 409, f"a run is already going: #{active.id} {active.kind} on {active.profile}",
+                          title="One run at a time", level="warn", link=f"/runs/{active.id}", link_text="Watch it")
         return RedirectResponse(f"/runs/{run.id}", status_code=303)
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_page(run_id: int, request: Request):
         run = runner.runs.get(run_id)
         if run is None:
-            return HTMLResponse(f"no run #{run_id} (runs live only while `stack ui` does)", status_code=404)
-        return page("run.html", request, run=run)
+            return notice(request, 404, f"no run #{run_id} (runs live only while `stack ui` does)",
+                          title="No such run", link="/", link_text="Profiles")
+        profile = load_profile(run.profile)
+        stack = stack_or_error(profile)[0] if profile else None
+        return page("run.html", request, run=run, env=environment(stack))
 
     @app.get("/runs/{run_id}/lines", response_class=HTMLResponse)
     def run_lines(run_id: int, request: Request):
