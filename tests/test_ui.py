@@ -96,6 +96,7 @@ def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     lines = site.get("/runs/2/lines").text
     assert "done: 1 steps" in lines
     assert 'id="going" hx-swap-oob="true"></span>' in lines      # the header badge clears with the run
+    assert site.get("/runs/2").text.count('id="going"') == 1       # the full page carries it once
     assert "#2" in site.get("/p/dogfood").text and "upgrade · every app" in site.get("/p/dogfood").text
 
 

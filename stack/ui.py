@@ -133,7 +133,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         run = runner.runs.get(run_id)
         if run is None:
             return HTMLResponse("", status_code=404)
-        return page("_lines.html", request, run=run)
+        return page("_lines.html", request, run=run, oob=True)   # the polled response also refreshes the header badge
 
     return app
 

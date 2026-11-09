@@ -1,7 +1,7 @@
 {# The run's lines. While it runs, the block polls itself and swaps whole; a
    finished block carries no trigger, so polling stops with it. The header's
    badge rides along out of band, so it clears when the run does. #}
-<span id="going" hx-swap-oob="true">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>
+{% if oob %}<span id="going" hx-swap-oob="true">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>{% endif %}
 <div id="lines" class="card"
      {% if run.status == 'running' %}hx-get="/runs/{{ run.id }}/lines" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <p><span class="badge b-{{ run.status }}">{{ run.status }}</span>
