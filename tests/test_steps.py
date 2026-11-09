@@ -162,7 +162,9 @@ def test_pods_present_but_a_failed_last_deploy_is_dispatched_again(home):
     assert "bab: deploy dispatched (the last deploy had failed)" in report.done
     # pods present and the last deploy fine: nothing to run
     github = FakeGitHub(runs={"o/bab": ("completed", "success")})
-    _, report, _ = _run(home, stack, gojira=FakeGojira(), kubectl=kubectl, github=github)
+    gojira = FakeGojira()
+    gojira.connect_outcome["bab"] = ("active", "")
+    _, report, _ = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github)
     assert not any(c.startswith("dispatch") for c in github.calls)
 
 
