@@ -135,9 +135,12 @@ contents. A profile's page shows what its stack file says and three buttons:
   upgrade for that app. An app without `source_image:` says so in its row.
 - **Install** / **Upgrade** — the command line's engine, on the apps you
   tick (Install with none ticked is every app; Upgrade needs its apps
-  named), with the same two gates as checkboxes. The run's lines appear as
-  they happen; a stop is the same sentence the terminal prints, in red. One
-  run at a time, on localhost only; runs live while `stack ui` does.
+  named). Pressing is the review: the PRs a run opens on the install's own
+  repos (setup PRs, pins) are merged by the run and linked in its lines, so
+  the only gate left is the backup box for an app with a `data_mount`. The
+  run's lines appear as they happen; a stop is the same sentence the terminal
+  prints, in red. One run at a time, on localhost only; runs live while
+  `stack ui` does.
 
 The install flow for a cluster that has no Gojira yet (the GitHub App, the
 Secrets, the pauses where a person acts) is the next increment.

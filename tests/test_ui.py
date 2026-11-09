@@ -28,8 +28,8 @@ def _wait(run, seconds=10):
 def site(tmp_path):
     calls = []
 
-    def perform(target, action, apps, *, merge_setup_prs=False, yes=False, say=print):
-        calls.append((target, action, apps, merge_setup_prs, yes))
+    def perform(target, action, apps, *, merge_setup_prs=False, yes=False, merge_pins=False, say=print):
+        calls.append((target, action, apps, merge_setup_prs, yes, merge_pins))
         say("== litellm")
         say("  litellm: connected (app 1)")
         if "boom" in apps:
@@ -73,13 +73,13 @@ def test_a_profile_shows_its_stack_file_and_stores_only_paths(site):
 
 def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     _add(site)
-    r = site.post("/p/dogfood/run", data={"action": "install", "apps": ["litellm", "boom"],
-                                          "merge_setup_prs": "true"}, follow_redirects=False)
+    r = site.post("/p/dogfood/run", data={"action": "install", "apps": ["litellm", "boom"]}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/runs/1"
     run = site.runner.runs[1]
     _wait(run)
-    target, action, apps, merge, yes = site.calls[0]
-    assert action == "install" and apps == ["litellm", "boom"] and merge is True and yes is False
+    target, action, apps, merge, yes, pins = site.calls[0]
+    assert action == "install" and apps == ["litellm", "boom"] and yes is False
+    assert merge is True and pins is True            # the press is the review
     assert target.stack_file == DOGFOOD and target.cbl.endswith("cabal/.venv/bin/cbl")
     assert target.env["CLOUDSDK_CORE_ACCOUNT"] == "me@example.com"
     assert target.env["KUBECONFIG"].endswith(".kube-dogfood/config") and "~" not in target.env["KUBECONFIG"]
@@ -93,7 +93,7 @@ def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     assert site.post("/p/dogfood/run", data={"action": "upgrade"}).status_code == 422
     site.post("/p/dogfood/run", data={"action": "upgrade", "apps": ["kobo"], "yes": "true"}, follow_redirects=False)
     _wait(site.runner.runs[2])
-    assert site.calls[1][1:] == ("upgrade", ["kobo"], False, True)
+    assert site.calls[1][1:] == ("upgrade", ["kobo"], True, True, True)
     lines = site.get("/runs/2/lines").text
     assert "done: 1 steps" in lines
     assert 'id="going" hx-swap-oob="true"></span>' in lines      # the header badge clears with the run
@@ -167,7 +167,7 @@ def test_pick_a_release_pins_it_in_the_stack_file_and_runs_that_app(tmp_path):
     calls = []
 
     def perform(target, action, apps, **kw):
-        calls.append((action, apps, kw["yes"]))
+        calls.append((action, apps, kw["yes"], kw["merge_setup_prs"], kw["merge_pins"]))
         return Report()
 
     runner = Runner()
@@ -189,6 +189,6 @@ def test_pick_a_release_pins_it_in_the_stack_file_and_runs_that_app(tmp_path):
     text = stack_file.read_text()
     assert "    image: r/agent-images/kobo:v2.0@sha256:" + "b" * 64 + "   # v2.0, pinned by stack ui\n" in text
     assert "image: r/agent-images/litellm:1" in text and "by hand" not in text
-    assert calls == [("upgrade", ["kobo"], True)]
+    assert calls == [("upgrade", ["kobo"], True, True, True)]
     run_page = site.get("/runs/1").text
     assert "stack file now pins r/agent-images/kobo:v2.0@sha256:bbbb" in run_page and "upgrade · kobo to v2.0" in site.get("/p/t").text

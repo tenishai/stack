@@ -100,8 +100,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         return _started(runner.start(name, "check", "preflight", work))
 
     @app.post("/p/{name}/run")
-    def start_run(name: str, action: str = Form(), apps: list[str] = Form([]),
-                  merge_setup_prs: bool = Form(False), yes: bool = Form(False)):
+    def start_run(name: str, action: str = Form(), apps: list[str] = Form([]), yes: bool = Form(False)):
         profile = load_profile(name)
         if profile is None:
             return HTMLResponse(f"no profile {name!r}", status_code=404)
@@ -113,7 +112,8 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         target = profile.target()
 
         def work(run: _runs.Run):
-            report = perform(target, action, apps, merge_setup_prs=merge_setup_prs, yes=yes, say=run.say)
+            # The press is the review: PRs this run opens on the install's own repos are merged by it.
+            report = perform(target, action, apps, merge_setup_prs=True, merge_pins=True, yes=yes, say=run.say)
             run.add("ok", f"done: {len(report.done)} steps"
                     + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
 
@@ -151,7 +151,8 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
 
         def work(run: _runs.Run):
             run.add("info", f"{app_name}: stack file now pins {new} (was {old})")
-            report = perform(target, "upgrade", [app_name], yes=yes, say=run.say)
+            report = perform(target, "upgrade", [app_name], merge_setup_prs=True, merge_pins=True, yes=yes,
+                             say=run.say)
             run.add("ok", f"done: {len(report.done)} steps"
                     + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
 

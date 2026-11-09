@@ -117,6 +117,24 @@ def test_pr_gate_opens_a_pr_and_provisions_after_merge(tmp_path):
     assert any("upgraded" in line for line in lines)
 
 
+def test_pr_gate_with_merge_pins_merges_its_own_pr(tmp_path):
+    """The page's press is the review: the run merges the pin PR it opened
+    and goes on, instead of waiting on a person (2026-11-09)."""
+    stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
+                               "image": f"reg.example/apps/kobo@{NEW_DIGEST}"}])
+    github = FakeGitHub(repos={"org/kobo-deploy": {"gojira.yaml": GOJIRA_YAML}})
+    github.open_pr_state = "open"
+    gojira = FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")])
+    kubectl = FakeKubectl(images={"kobo": f"reg.example/apps/kobo@{NEW_DIGEST}"})
+    crane = FakeCrane(digests={f"reg.example/apps/kobo@{NEW_DIGEST}": NEW_DIGEST})
+    inst, report, lines = _upgrade(tmp_path, stack, gojira=gojira, github=github, kubectl=kubectl,
+                                   crane=crane, merge_pins=True)
+    assert any(c.startswith("open_pr:") for c in github.calls)
+    assert any(c.startswith("merge:https://github.com/org/kobo-deploy/pull/") for c in github.calls), github.calls
+    assert report.waited_on == [] and not any("waiting for someone" in line for line in lines)
+    assert any("provision:1" == c for c in gojira.calls) and any("upgraded" in line for line in lines)
+
+
 def test_push_gate_pushes_directly(tmp_path):
     stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
                                "image": "reg.example/apps/kobo:v2"}], upgrade_gate="push")

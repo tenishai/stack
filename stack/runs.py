@@ -60,7 +60,7 @@ def open_gojira(stack: Stack, target: Target, say: Callable[[str], None] = print
 
 
 def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bool = False,
-            yes: bool = False, say: Callable[[str], None] = print) -> Report:
+            yes: bool = False, merge_pins: bool = False, say: Callable[[str], None] = print) -> Report:
     """`stack install` or `stack upgrade` on `target`. Raises ToolError with
     the sentence to show; never prints a traceback."""
     stack = Stack.load(target.stack_file)
@@ -74,7 +74,7 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
         if action == "upgrade":
             clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), crane=CraneCLI(env))
             opts = Options(stack_dir=target.stack_file.parent, repo_root=target.stack_file.parent,
-                           merge_setup_prs=merge_setup_prs, yes=yes, say=say)
+                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say)
             return Installer(stack, clients, opts).upgrade(apps)
         if action != "install":
             raise ToolError(f"no such action {action!r}")

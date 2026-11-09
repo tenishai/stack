@@ -97,6 +97,7 @@ class Options:
     iam_settle_seconds: float = 60.0     # a new deploy identity is usable after about this
     token_ttl_days: int = 90
     yes: bool = False                    # upgrade: the data_mount backup gate was answered
+    merge_pins: bool = False             # upgrade: merge the pin PR this run opens (the UI: the press is the review)
     say: object = print
 
 
@@ -531,6 +532,10 @@ class Installer:
                 "that follows regenerates the workflow.")
         url = self.c.github.open_pr(app.deploy_repo, {"gojira.yaml": new_text}, title, body,
                                     branch=f"upgrade/{app.name}-{desired[7:19]}")
+        if self.o.merge_pins:
+            self.c.github.merge_pr(url)
+            self.report.note(f"{app.name}: pin merged ({url})", self.o.say)
+            return
         self.o.say(f"  {app.name}: waiting for someone to merge {url}")
         self.report.waited_on.append(url)
         deadline = time.monotonic() + self.o.pr_wait_seconds

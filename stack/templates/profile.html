@@ -30,9 +30,9 @@ upgrade gate: {{ stack.upgrade_gate }}.</p>
   <p class="muted">Tick apps for only those; Install with none ticked is every app in the file's order, Upgrade needs its apps named (or pick a release in the table above).</p>
   <div class="checks">{% for a in stack.apps %}<label><input type="checkbox" name="apps" value="{{ a.name }}"> {{ a.name }}</label>{% endfor %}</div>
   <div class="checks">
-    <label><input type="checkbox" name="merge_setup_prs" value="true"> merge the setup PRs myself (repos I own)</label>
     <label><input type="checkbox" name="yes" value="true"> the data_mount apps' PVCs are backed up (upgrade)</label>
   </div>
+  <p class="muted">Pressing is the review: the PRs a run opens on the install's own repos (setup PRs, pins) are merged by the run, and each is linked in its lines.</p>
   {% if busy %}
   <p class="err">run #{{ busy.id }} ({{ busy.kind }} on {{ busy.profile }}) is going; <a href="/runs/{{ busy.id }}">watch it</a>.</p>
   {% else %}
