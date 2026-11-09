@@ -1,79 +1,111 @@
 {% extends "base.html" %}
 {% block title %}stack · {{ profile.name }}{% endblock %}
 {% block content %}
-<h1>{{ profile.name }}</h1>
-<p class="mono muted">{{ profile.stack_file }}</p>
-
+<div class="page-head">
+  <h1>{{ profile.name }}</h1>
 {% if error %}
+  <div class="status-strip"><span class="item"><span class="k">Stack file</span><span class="v mono">{{ profile.stack_file }}</span></span></div>
+</div>
 <div class="card"><p class="err">{{ error }}</p></div>
 {% else %}
-<p class="muted">Gojira on <span class="mono">{{ stack.gojira.kube_context or '(current context)' }}</span>,
-cluster {{ stack.cluster.name }} ({{ stack.cluster.gcp_project }}, {{ stack.cluster.location }}).</p>
-
-<div class="card">
-  <h2 style="margin-top:0">Check</h2>
-  <p class="muted">Tools on PATH, the files the stack file names, gh's access to the repos' orgs, the kube context,
-  and each app's state on Gojira. Names what is missing; grants nothing.</p>
-  {% if last_check %}
-  <p>Last check: <a href="/runs/{{ last_check.id }}">#{{ last_check.id }}</a>
-     <span class="badge b-{{ last_check.status }}">{{ last_check.status }}</span>
-     {% if last_check.lines %}<span class="muted">{{ last_check.lines[-1].text }}</span>{% endif %}</p>
-  {% else %}
-  <p class="muted">Not checked since stack ui started.</p>
-  {% endif %}
-  <form method="post" action="/p/{{ profile.name }}/check" class="inline">
-    <button type="submit" {% if busy %}disabled{% endif %}>Check</button>
-  </form>
+  {# The strip reads the stack file, so it lives behind the parse guard. #}
+  <div class="status-strip">
+    <span class="item"><span class="k">Stack file</span><span class="v mono">{{ profile.stack_file }}</span></span>
+    <span class="item"><span class="k">Gojira context</span><span class="v mono">{{ stack.gojira.kube_context or '(current context)' }}</span></span>
+    <span class="item"><span class="k">Cluster</span><span class="v">{{ stack.cluster.name }} <span class="muted">({{ stack.cluster.gcp_project }}, {{ stack.cluster.location }})</span></span></span>
+  </div>
 </div>
 
-<h2>Apps</h2>
-<p class="muted">Upgrades happen here, one app at a time: pick a release, tick its backup box if it has data, press.
-Pressing is the review: the PRs a run opens on the install's own repos are merged by the run and linked in its lines.</p>
-<table>
-  <tr><th>App</th><th>Repo</th><th>Image</th><th class="releases">Releases</th></tr>
-  {% for a in stack.apps %}
-  <tr>
-    <td>{{ a.name }}{% if a.bootstrap %} <span class="badge b-info">{{ a.bootstrap }}</span>{% endif %}</td>
-    <td class="mono">{{ a.connected_repo }}{% if a.deploy_repo %}<br><span class="muted">from {{ a.repo }}</span>{% endif %}</td>
-    <td class="mono">{{ a.image | short_image if a.image else '(built from source)' }}</td>
-    <td>{% if a.source_image %}<div hx-get="/p/{{ profile.name }}/tags/{{ a.name }}" hx-trigger="load" hx-swap="innerHTML"><span class="muted">reading releases…</span></div>
-        {% elif a.deploy_repo %}<span class="muted">set <span class="mono">source_image:</span> in the stack file to pick releases here</span>
-        {% else %}<span class="muted">built from {{ a.repo }}</span>{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
+<section class="stage">
+  <div class="stage-head">
+    <span class="stage-num">1</span>
+    <div class="stage-meta">
+      <h2 class="stage-title">Check</h2>
+      <p class="stage-purpose">Tools on PATH, the files the stack file names, gh's access to the repos' orgs, the kube context, and each app's state on Gojira. Names what is missing; grants nothing.</p>
+    </div>
+    <div class="stage-action">
+      <form method="post" action="/p/{{ profile.name }}/check" class="inline">
+        <button type="submit" {% if busy %}disabled{% endif %}>Check</button>
+      </form>
+    </div>
+  </div>
+  <div class="card">
+    {% if last_check %}
+    <p>Last check: <a href="/runs/{{ last_check.id }}">#{{ last_check.id }}</a>
+       <span class="badge b-{{ last_check.status }}">{{ last_check.status }}</span>
+       {% if last_check.lines %}<span class="muted">{{ last_check.lines[-1].text }}</span>{% endif %}</p>
+    {% else %}
+    <p class="muted">Not checked since stack ui started.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="stage">
+  <div class="stage-head">
+    <span class="stage-num">2</span>
+    <div class="stage-meta">
+      <h2 class="stage-title">Apps</h2>
+      <p class="stage-purpose">Upgrades happen here, one app at a time: pick a release, tick its backup box if it has data, press. Pressing is the review: the PRs a run opens on the install's own repos are merged by the run and linked in its lines.</p>
+    </div>
+  </div>
+  <table class="apps-table">
+    <tr><th>App</th><th>Repo</th><th>Image</th><th class="releases">Releases</th></tr>
+    {% for a in stack.apps %}
+    <tr>
+      <td class="app">{{ a.name }}{% if a.bootstrap %} <span class="badge b-info">{{ a.bootstrap }}</span>{% endif %}</td>
+      <td class="repo mono">{{ a.connected_repo }}{% if a.deploy_repo %}<br><span class="muted">from {{ a.repo }}</span>{% endif %}</td>
+      <td class="image"><span class="img-label">image</span><span class="img-val mono">{{ a.image | short_image if a.image else '(built from source)' }}</span></td>
+      <td>{% if a.source_image %}<div hx-get="/p/{{ profile.name }}/tags/{{ a.name }}" hx-trigger="load" hx-swap="innerHTML"><span class="muted">reading releases…</span></div>
+          {% elif a.deploy_repo %}<span class="muted">set <span class="mono">source_image:</span> in the stack file to pick releases here</span>
+          {% else %}<span class="muted">built from {{ a.repo }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
 
 {% if runs %}
-<h2>Runs</h2>
-<table>
-  <tr><th>#</th><th>What</th><th>Status</th><th>Lines</th></tr>
-  {% for r in runs %}
-  <tr>
-    <td><a href="/runs/{{ r.id }}">#{{ r.id }}</a></td>
-    <td>{{ r.kind }} · {{ r.what }}</td>
-    <td><span class="badge b-{{ r.status }}">{{ r.status }}</span></td>
-    <td class="muted">{{ r.lines | length }}</td>
-  </tr>
-  {% endfor %}
-</table>
+<section class="stage">
+  <div class="stage-head">
+    <div class="stage-meta">
+      <h2 class="stage-title">Runs</h2>
+      <p class="stage-purpose">Recent runs on this profile; open one to watch its lines.</p>
+    </div>
+  </div>
+  <table>
+    <tr><th>#</th><th>What</th><th>Status</th><th>Lines</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/runs/{{ r.id }}">#{{ r.id }}</a></td>
+      <td>{{ r.kind }} · {{ r.what }}</td>
+      <td><span class="badge b-{{ r.status }}">{{ r.status }}</span></td>
+      <td class="muted">{{ r.lines | length }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
 {% endif %}
 
-<h2>Install</h2>
-<div class="card">
-  <form method="post" action="/p/{{ profile.name }}/install">
-  <p class="muted">Every app in the file's order, or only the ticked ones. A rerun on installed apps changes nothing
-  it finds in place; an app ticked by name is provisioned again so a changed contract takes effect.</p>
-  <div class="checks">{% for a in stack.apps %}<label><input type="checkbox" name="apps" value="{{ a.name }}"> {{ a.name }}</label>{% endfor %}</div>
-  {% if busy %}
-  <p class="err">run #{{ busy.id }} ({{ busy.kind }} on {{ busy.profile }}) is going; <a href="/runs/{{ busy.id }}">watch it</a>.</p>
-  {% else %}
-  <button type="submit" class="quiet">Install</button>
-  {% endif %}
-  </form>
-</div>
-{% endif %}
+<section class="stage stage-quiet">
+  <div class="stage-head">
+    <span class="stage-num">3</span>
+    <div class="stage-meta">
+      <h2 class="stage-title">Install</h2>
+      <p class="stage-purpose">Every app in the file's order, or only the ticked ones. A rerun on installed apps changes nothing it finds in place; an app ticked by name is provisioned again so a changed contract takes effect.</p>
+    </div>
+  </div>
+  <div class="card">
+    <form method="post" action="/p/{{ profile.name }}/install">
+    <div class="checks">{% for a in stack.apps %}<label><input type="checkbox" name="apps" value="{{ a.name }}"> {{ a.name }}</label>{% endfor %}</div>
+    {% if busy %}
+    <p class="err">run #{{ busy.id }} ({{ busy.kind }} on {{ busy.profile }}) is going; <a href="/runs/{{ busy.id }}">watch it</a>.</p>
+    {% else %}
+    <button type="submit" class="quiet">Install</button>
+    {% endif %}
+    </form>
+  </div>
+</section>
 
-<details>
+<details class="profile">
   <summary>Profile</summary>
   <div class="card">
     {% include "_profile_form.html" %}
@@ -83,4 +115,5 @@ Pressing is the review: the PRs a run opens on the install's own repos are merge
     </form>
   </div>
 </details>
+{% endif %}
 {% endblock %}

@@ -49,6 +49,45 @@
     .line.head { font-weight:700; margin-top:8px; }
     .line.ok { color:#166534; } .line.warn { color:#92400e; } .line.fail { color:#991b1b; font-weight:600; }
     .checks label { display:inline-block; margin-right:14px; font-size:14px; }
+
+    /* --- page title + status strip --- */
+    .page-head { margin-bottom:22px; }
+    .page-head h1 { margin:0 0 12px; }
+    .status-strip { display:flex; flex-wrap:wrap; gap:8px 22px; padding:12px 16px;
+                    background:#fff; border:1px solid var(--line); border-radius:10px; }
+    .status-strip .item { display:flex; align-items:baseline; gap:8px; }
+    .status-strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    .status-strip .v { font-size:14px; color:var(--fg); }
+
+    /* --- numbered stage sections --- */
+    .stage { margin:0 0 30px; }
+    .stage-head { display:flex; align-items:flex-start; gap:14px; margin:0 0 14px; }
+    .stage-num { flex:none; width:28px; height:28px; border-radius:8px; background:var(--accent); color:#fff;
+                 font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+    .stage-meta { flex:1; min-width:0; }
+    .stage-title { font-size:17px; font-weight:700; margin:0; }
+    .stage-purpose { margin:2px 0 0; font-size:13px; color:var(--muted); }
+    .stage-action { flex:none; align-self:center; }
+    .stage-action .inline button { margin:0; }
+
+    /* --- calmer app table --- */
+    .apps-table th, .apps-table td { vertical-align:middle; }
+    .apps-table td.app { font-weight:600; }
+    .apps-table td.repo { color:var(--muted); }
+    .apps-table td.image { white-space:nowrap; }
+    .apps-table td.image .img-label { display:block; font-size:11px; text-transform:uppercase;
+                                       letter-spacing:.04em; color:var(--muted); margin-bottom:2px; }
+    .apps-table td.image .img-val { display:block; }
+    .apps-table td.image .img-val.mono { font-size:12px; }
+
+    /* --- quiet last card (Install) --- */
+    .stage-quiet .card { background:#fbfbfc; }
+    .stage-quiet .stage-num { background:#e5e7eb; color:var(--muted); }
+
+    /* --- folded profile --- */
+    details.profile { margin-top:8px; }
+    details.profile > summary { margin:0 0 12px; font-size:14px; font-weight:600; color:var(--muted); }
+    details.profile > summary:hover { color:var(--fg); }
   </style>
 </head>
 <body>
