@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}stack · run #{{ run.id }}{% endblock %}
+{% block content %}
+<h1>#{{ run.id }} {{ run.kind }} on <a href="/p/{{ run.profile }}">{{ run.profile }}</a></h1>
+<p class="muted">{{ run.what }}</p>
+{% include "_lines.html" %}
+{% endblock %}

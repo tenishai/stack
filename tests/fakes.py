@@ -120,6 +120,16 @@ class FakeGitHub:
         # what a freshly opened pin PR's state reads as; "merged" lands its files
         self.open_pr_state = "merged"
         self.pr_files: dict[str, dict[str, str]] = {}
+        self.user = "tester"                  # "" = not logged in
+        self.org_denied: dict[str, str] = {}  # org -> why gh cannot see it
+
+    def login(self):
+        if not self.user:
+            raise ToolError("gh is not logged in (gh auth login)")
+        return self.user
+
+    def org_access(self, org):
+        return self.org_denied.get(org, "")
 
     def repo_exists(self, repo):
         return repo in self.repos

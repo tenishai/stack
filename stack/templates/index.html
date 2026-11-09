@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}stack · profiles{% endblock %}
+{% block content %}
+<h1>Profiles</h1>
+<p class="muted">One per install. A profile is a name and paths: the stack file stays the truth about the
+install; the profile pins which kubeconfig and cloud account every call uses, so nothing depends on a shell export.</p>
+
+{% if profiles %}
+<table>
+  <tr><th>Name</th><th>Stack file</th><th>Kubeconfig</th><th>Cloud account</th></tr>
+  {% for p in profiles %}
+  <tr>
+    <td><a href="/p/{{ p.name }}">{{ p.name }}</a></td>
+    <td class="mono">{{ p.stack_file }}</td>
+    <td class="mono">{{ p.kubeconfig or '(default)' }}</td>
+    <td class="mono">{{ p.cloud_account or '(default)' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No profiles yet.</p>
+{% endif %}
+
+<h2>Add a profile</h2>
+<div class="card">
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  {% include "_profile_form.html" %}
+</div>
+{% endblock %}

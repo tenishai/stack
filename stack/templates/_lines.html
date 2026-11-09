@@ -1,0 +1,12 @@
+{# The run's lines. While it runs, the block polls itself and swaps whole; a
+   finished block carries no trigger, so polling stops with it. #}
+<div id="lines" class="card"
+     {% if run.status == 'running' %}hx-get="/runs/{{ run.id }}/lines" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <p><span class="badge b-{{ run.status }}">{{ run.status }}</span>
+     {% if run.status == 'running' %}<span class="muted">{{ run.lines | length }} lines so far</span>{% endif %}</p>
+  {% for l in run.lines %}
+  <div class="line {{ l.level }}"><span class="text">{{ l.text }}</span></div>
+  {% else %}
+  <p class="muted">opening the hands on the install…</p>
+  {% endfor %}
+</div>

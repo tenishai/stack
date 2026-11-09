@@ -7,7 +7,9 @@ license = "AGPL-3.0-or-later"
 dependencies = ["pydantic>=2", "pyyaml>=6", "httpx>=0.27"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+dev = ["pytest>=8", "ruff>=0.5", "tenish-stack[ui]"]
+# `stack ui`: the same files behind buttons (stack#12)
+ui = ["fastapi>=0.110", "uvicorn>=0.27", "jinja2>=3", "python-multipart>=0.0.9"]
 
 [project.scripts]
 stack = "stack.cli:main"
@@ -18,6 +20,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["stack"]
+
+[tool.setuptools.package-data]
+stack = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
