@@ -15,6 +15,7 @@ forgets them, the cluster and the repos remember.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import traceback
@@ -22,11 +23,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stack.clients import CblCLI, CraneCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
-from stack.model import Stack
-from stack.steps import Clients, Installer, Options, Report
+from stack.clients import CblCLI, CraneCLI, CraneClient, GhCLI, HttpGojira, KubectlCLI, ToolError
+from stack.model import App, Stack
+from stack.steps import Clients, Installer, Options, Report, ref_parts
 
 LEVELS = ("head", "info", "ok", "warn", "fail")
+VERSION_TAG = re.compile(r"v?\d+(\.\d+)+")
 
 
 @dataclass
@@ -94,6 +96,45 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
         gojira.close()
         if cabal is not None:
             cabal.close()
+
+
+# --- releases: what the stack file could pin next ------------------------------
+
+
+def available_tags(app: App, crane: CraneClient, limit: int = 20) -> list[str]:
+    """The version-looking tags published at `source_image:`, newest first."""
+    if not app.source_image:
+        raise ToolError(f"{app.name}: no source_image: in the stack file to list releases from")
+    tags = [t for t in crane.tags(app.source_image) if VERSION_TAG.fullmatch(t)]
+    tags.sort(key=lambda t: tuple(int(x) for x in re.findall(r"\d+", t)), reverse=True)
+    return tags[:limit]
+
+
+def set_image(target: Target, app_name: str, tag: str, crane: CraneClient) -> tuple[str, str]:
+    """Rewrite the stack file's `image:` line for `app_name` to `<repo>:<tag>@<digest>`,
+    the digest read from `source_image:<tag>` — the receipt the file keeps, and what
+    `stack upgrade` verifies after the copy. One line changes; the rest of the file,
+    comments included, is left as the operator wrote it. Returns (old, new)."""
+    stack = Stack.load(target.stack_file)
+    app = next((a for a in stack.apps if a.name == app_name), None)
+    if app is None:
+        raise ToolError(f"not in the stack file: {app_name}")
+    if not app.source_image:
+        raise ToolError(f"{app.name}: no source_image: in the stack file to upgrade from")
+    digest = crane.digest(f"{app.source_image}:{tag}")   # a tag that isn't published stops here
+    repo, _, _ = ref_parts(app.image)
+    line = re.compile(r"(?m)^([ \t]*)image:[ \t]*" + re.escape(repo) + r"(?::[^\s@#]+)?(?:@sha256:[0-9a-f]{64})?[ \t]*(?:#.*)?$")
+    text = target.stack_file.read_text()
+    found = line.findall(text)
+    if len(found) != 1:
+        raise ToolError(f"{app.name}: expected one image: line naming {repo} in {target.stack_file}, found {len(found)}")
+    new = f"{repo}:{tag}@{digest}"
+    text = line.sub(lambda m: f"{m.group(1)}image: {new}   # {tag}, pinned by stack ui", text, count=1)
+    after = Stack.model_validate(__import__("yaml").safe_load(text))   # still a stack file, with the new pin
+    if next(a for a in after.apps if a.name == app_name).image != new:
+        raise ToolError(f"{app.name}: the rewritten file does not carry the new image")
+    target.stack_file.write_text(text)
+    return app.image, new
 
 
 # --- runs, kept for the page ---------------------------------------------------

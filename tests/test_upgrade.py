@@ -77,6 +77,20 @@ def test_already_at_the_digest_does_nothing(tmp_path):
     assert not any(c.startswith("provision:") for c in gojira.calls)
 
 
+def test_a_deploy_line_pinned_by_tag_at_the_same_digest_does_nothing(tmp_path):
+    """The install writes the deploy repo's image: by tag. Upgrade compares
+    what that tag resolves to; re-pinning the same bytes by digest is not an
+    upgrade (an Upgrade pressed on a live install opened one, 2026-11-09)."""
+    stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
+                               "image": "reg.example/apps/kobo:v2"}])
+    github = FakeGitHub(repos={"org/kobo-deploy": {"gojira.yaml": "image: reg.example/apps/kobo:v2   # by tag\n"}})
+    gojira = FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")])
+    crane = FakeCrane(digests={"reg.example/apps/kobo:v2": NEW_DIGEST})
+    inst, report, lines = _upgrade(tmp_path, stack, gojira=gojira, github=github, crane=crane)
+    assert any("nothing to do" in line for line in lines)
+    assert not any(c.startswith("open_pr:") for c in github.calls) and gojira.calls == []
+
+
 def test_missing_digest_is_copied_from_source_image(tmp_path):
     stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
                                "image": "reg.example/apps/kobo:v2", "source_image": "ghcr.io/up/kobo"}])

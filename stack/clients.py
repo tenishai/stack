@@ -406,6 +406,7 @@ class GhCLI:
 class CraneClient(Protocol):
     def digest(self, ref: str) -> str: ...
     def copy(self, src: str, dst: str) -> None: ...
+    def tags(self, repo: str) -> list[str]: ...
 
 
 class CraneCLI:
@@ -423,6 +424,9 @@ class CraneCLI:
 
     def copy(self, src, dst) -> None:
         _run(["crane", "cp", src, dst], timeout=600, env=self._env)
+
+    def tags(self, repo) -> list[str]:
+        return _run(["crane", "ls", repo], env=self._env).split()
 
 
 # --- cabal (through its CLI, against a port-forward) ------------------------

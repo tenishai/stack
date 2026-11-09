@@ -182,6 +182,12 @@ class FakeCrane:
     def __init__(self, digests: dict[str, str] | None = None):
         self.digests = digests or {}   # ref -> digest
         self.copied: list[tuple[str, str]] = []
+        self.tags_by: dict[str, list[str]] = {}   # repo -> what `crane ls` prints
+
+    def tags(self, repo):
+        if repo not in self.tags_by:
+            raise ToolError(f"{repo}: NAME_UNKNOWN")
+        return list(self.tags_by[repo])
 
     def digest(self, ref):
         if ref not in self.digests:

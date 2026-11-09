@@ -127,10 +127,17 @@ contents. A profile's page shows what its stack file says and three buttons:
   app's state on Gojira: its row, its pods, what it runs against what the
   file pins. Each row names what is missing and whose hands fix it; the page
   runs under your credentials and can grant nothing.
+- **Releases** — for an app with `source_image:`, the app table lists the
+  version tags published there, newest first. Pick one and press *Upgrade
+  to*: the page rewrites that app's `image:` line in the stack file to
+  `<repo>:<tag>@<digest>` (the digest read from the source; the one line a
+  person would have edited, the rest of the file untouched) and runs the
+  upgrade for that app. An app without `source_image:` says so in its row.
 - **Install** / **Upgrade** — the command line's engine, on the apps you
-  tick (none = all), with the same two gates as checkboxes. The run's lines
-  appear as they happen; a stop is the same sentence the terminal prints, in
-  red. One run at a time, on localhost only; runs live while `stack ui` does.
+  tick (Install with none ticked is every app; Upgrade needs its apps
+  named), with the same two gates as checkboxes. The run's lines appear as
+  they happen; a stop is the same sentence the terminal prints, in red. One
+  run at a time, on localhost only; runs live while `stack ui` does.
 
 The install flow for a cluster that has no Gojira yet (the GitHub App, the
 Secrets, the pauses where a person acts) is the next increment.

@@ -1,0 +1,15 @@
+{# One app's releases at source_image, newest first; pick one and the stack
+   file's image: line is rewritten and the upgrade runs for that app. #}
+{% if error %}<span class="err">{{ error }}</span>
+{% elif not tags %}<span class="muted">no version tags at {{ app.source_image }}</span>
+{% else %}
+<form method="post" action="/p/{{ profile.name }}/upgrade-to" class="pick">
+  <input type="hidden" name="app" value="{{ app.name }}">
+  <select name="tag">
+    {% for t in tags %}<option value="{{ t }}" {% if t == current %}selected{% endif %}>{{ t }}{% if t == current %} (current){% endif %}</option>{% endfor %}
+  </select>
+  <button type="submit" class="quiet">Upgrade to</button>
+  <label><input type="checkbox" name="yes" value="true"> its data (a PVC, if it has one) is backed up</label>
+  {% if not current %}<span class="muted">now pinned by digest only</span>{% endif %}
+</form>
+{% endif %}

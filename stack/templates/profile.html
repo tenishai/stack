@@ -11,21 +11,24 @@
 cluster {{ stack.cluster.name }} ({{ stack.cluster.gcp_project }}, {{ stack.cluster.location }}),
 upgrade gate: {{ stack.upgrade_gate }}.</p>
 
-<form method="post" action="/p/{{ profile.name }}/run">
 <table>
-  <tr><th></th><th>App</th><th>Repo</th><th>Image</th><th>Namespace</th></tr>
+  <tr><th></th><th>App</th><th>Repo</th><th>Image</th><th>Releases</th></tr>
   {% for a in stack.apps %}
   <tr>
-    <td><input type="checkbox" name="apps" value="{{ a.name }}"></td>
+    <td></td>
     <td>{{ a.name }}{% if a.bootstrap %} <span class="badge b-info">{{ a.bootstrap }}</span>{% endif %}</td>
     <td class="mono">{{ a.connected_repo }}{% if a.deploy_repo %}<br><span class="muted">from {{ a.repo }}</span>{% endif %}</td>
     <td class="mono">{{ a.image or '(built from source)' }}</td>
-    <td class="mono">{{ a.namespace }}</td>
+    <td>{% if a.source_image %}<div hx-get="/p/{{ profile.name }}/tags/{{ a.name }}" hx-trigger="load" hx-swap="innerHTML"><span class="muted">reading {{ a.source_image }}…</span></div>
+        {% elif a.deploy_repo %}<span class="muted">set <span class="mono">source_image:</span> in the stack file to pick releases here</span>
+        {% else %}<span class="muted">built from {{ a.repo }}</span>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
+<form method="post" action="/p/{{ profile.name }}/run">
 <div class="card">
-  <p class="muted">Tick apps for only those, or none for every app in the file's order.</p>
+  <p class="muted">Tick apps for only those; Install with none ticked is every app in the file's order, Upgrade needs its apps named (or pick a release in the table above).</p>
+  <div class="checks">{% for a in stack.apps %}<label><input type="checkbox" name="apps" value="{{ a.name }}"> {{ a.name }}</label>{% endfor %}</div>
   <div class="checks">
     <label><input type="checkbox" name="merge_setup_prs" value="true"> merge the setup PRs myself (repos I own)</label>
     <label><input type="checkbox" name="yes" value="true"> the data_mount apps' PVCs are backed up (upgrade)</label>

@@ -454,6 +454,16 @@ class Installer:
         if not m:
             raise ToolError(f"{app.name}: no image: line in {app.deploy_repo}'s gojira.yaml")
         current = (DIGEST.search(m.group(0)) or [None, ""])[1]
+        if not current:
+            # The install wrote the deploy repo's line by tag. What that tag
+            # resolves to is the comparison; pinning the same bytes by digest
+            # is not an upgrade (an Upgrade pressed with nothing to upgrade,
+            # 2026-11-09, opened a pin PR for the image already running).
+            ref = m.group(0).split(":", 1)[1].split("#", 1)[0].strip()
+            try:
+                current = self.c.crane.digest(ref)
+            except ToolError:
+                current = ""
         if current == desired:
             self.report.note(f"{app.name}: already at {desired[:19]}…, nothing to do", self.o.say)
             return

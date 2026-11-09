@@ -19,16 +19,18 @@ from fastapi.templating import Jinja2Templates
 
 from stack import preflight as _preflight
 from stack import runs as _runs
-from stack.clients import ToolError
+from stack.clients import CraneCLI, ToolError
 from stack.model import Stack
 from stack.profiles import Profile, Profiles
+from stack.steps import ref_parts
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 ACTIONS = ("install", "upgrade")
 
 
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
-             perform: Callable = _runs.perform, preflight: Callable = _preflight.preflight) -> FastAPI:
+             perform: Callable = _runs.perform, preflight: Callable = _preflight.preflight,
+             crane: Callable = CraneCLI) -> FastAPI:
     app = FastAPI(title="stack")
     runner = runner or _runs.Runner()
 
@@ -105,6 +107,9 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return HTMLResponse(f"no profile {name!r}", status_code=404)
         if action not in ACTIONS:
             return HTMLResponse(f"no such action {action!r}", status_code=422)
+        if action == "upgrade" and not apps:
+            return HTMLResponse("tick the apps to upgrade (Install with none ticked is every app; "
+                                "Upgrade is not)", status_code=422)
         target = profile.target()
 
         def work(run: _runs.Run):
@@ -113,6 +118,44 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                     + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
 
         return _started(runner.start(name, action, ", ".join(apps) or "every app", work))
+
+    @app.get("/p/{name}/tags/{app_name}", response_class=HTMLResponse)
+    def tags(name: str, app_name: str, request: Request):
+        """The releases at the app's source_image, as a pick-one form; loaded
+        into the app table after the page, since crane takes a moment."""
+        profile = load_profile(name)
+        stack, error = stack_or_error(profile) if profile else (None, "no such profile")
+        app_ = next((a for a in stack.apps if a.name == app_name), None) if stack else None
+        if app_ is None:
+            return HTMLResponse(error or f"no app {app_name!r}", status_code=404)
+        try:
+            tags = _runs.available_tags(app_, crane(profile.target().env))
+        except ToolError as exc:
+            return page("_tags.html", request, profile=profile, app=app_, tags=[], current="", error=str(exc))
+        _, current, _ = ref_parts(app_.image)
+        return page("_tags.html", request, profile=profile, app=app_, tags=tags, current=current, error="")
+
+    @app.post("/p/{name}/upgrade-to")
+    def upgrade_to(name: str, app_name: str = Form(alias="app"), tag: str = Form(), yes: bool = Form(False)):
+        """Pin the release in the stack file, then run the upgrade for that app."""
+        profile = load_profile(name)
+        if profile is None:
+            return HTMLResponse(f"no profile {name!r}", status_code=404)
+        if runner.active():
+            return _started(None)
+        target = profile.target()
+        try:
+            old, new = _runs.set_image(target, app_name, tag, crane(target.env))
+        except ToolError as exc:
+            return HTMLResponse(f"not pinned: {exc}", status_code=422)
+
+        def work(run: _runs.Run):
+            run.add("info", f"{app_name}: stack file now pins {new} (was {old})")
+            report = perform(target, "upgrade", [app_name], yes=yes, say=run.say)
+            run.add("ok", f"done: {len(report.done)} steps"
+                    + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+
+        return _started(runner.start(name, "upgrade", f"{app_name} to {tag}", work))
 
     def _started(run: _runs.Run | None):
         if run is None:
