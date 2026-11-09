@@ -6,96 +6,195 @@
   <title>{% block title %}stack{% endblock %}</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   <style>
-    :root { --fg:#1c1c1e; --muted:#6b7280; --line:#e5e7eb; --bg:#f7f7f8; --accent:#2563eb; }
-    * { box-sizing: border-box; }
+    :root {
+      --fg:#1e1b2e; --muted:#6b6880; --line:#e6e4ee; --bg:#f5f4f8; --panel:#fff; --panel-head:#faf9fc;
+      /* indigo base, teal + terracotta complements, rose for prod/failure */
+      --accent:#5b5bd6; --accent-soft:#e8e8fb; --accent-head:#f3f3fd;
+      --ok:#0f6e66; --ok-soft:#d5f2ee; --ok-line:#2a9d8f; --ok-head:#eef9f7;
+      --warn:#9a4a1f; --warn-soft:#fbe9dd; --warn-line:#d9773f; --warn-head:#fdf5ef;
+      --fail:#9f1d43; --fail-soft:#fbe1e8; --fail-line:#d1456b; --fail-head:#fdf1f4;
+      --idle-line:#8e8aa6; --idle-head:#f6f5f9;
+      --env-line:var(--accent); --env-soft:var(--accent-soft); --env-fg:#3a3aa8;
+      color-scheme:light;
+    }
+    /* production wears rose at the top of every page that belongs to it */
+    body.env-prod, body.env-production { --env-line:var(--fail-line); --env-soft:var(--fail-soft); --env-fg:var(--fail); }
+    * { box-sizing:border-box; }
     body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
            color:var(--fg); background:var(--bg); }
-    header { display:flex; align-items:center; gap:24px; padding:14px 28px;
-             background:#fff; border-bottom:1px solid var(--line); }
+    a { color:var(--accent); }
+    .muted { color:var(--muted); } .err { color:var(--fail); font-size:13px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+    h1 { font-size:24px; margin:0 0 14px; } h2 { font-size:16px; margin:24px 0 10px; }
+
+    /* ---------- header + environment rail ---------- */
+    header { display:flex; align-items:center; gap:20px; padding:12px 28px; background:#fff;
+             border-top:4px solid var(--env-line); border-bottom:1px solid var(--line); }
     .brand { font-weight:700; font-size:18px; text-decoration:none; color:var(--fg); }
     nav a { margin-right:18px; text-decoration:none; color:var(--muted); }
     nav a:hover { color:var(--accent); }
-    main { max-width:920px; margin:28px auto; padding:0 20px; }
-    h1 { font-size:22px; margin:0 0 18px; } h2 { font-size:16px; margin:24px 0 10px; }
-    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
-            border-radius:10px; overflow:hidden; }
-    th,td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
-    th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); background:#fbfbfc; }
-    tr:last-child td { border-bottom:none; }
-    a { color:var(--accent); }
-    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px; margin-bottom:18px; }
-    form.stack label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
-    input[type=text],select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }
-    button { margin-top:16px; padding:9px 16px; border:0; border-radius:8px; background:var(--accent);
-             color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+    #going { margin-left:auto; }
+    .env { display:inline-block; padding:2px 10px; border-radius:6px; font-size:12px; font-weight:700;
+           letter-spacing:.06em; text-transform:uppercase; background:var(--env-soft); color:var(--env-fg);
+           border:1px solid var(--env-line); vertical-align:middle; }
+    main { max-width:1080px; margin:28px auto 60px; padding:0 20px; }
+
+    /* ---------- page head ---------- */
+    .page-head { margin-bottom:24px; }
+    .page-head h1 { display:flex; align-items:center; gap:12px; }
+    .status-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px 24px;
+                    padding:14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+    .status-strip .k { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    .status-strip .v { display:block; font-size:14px; overflow-wrap:anywhere; }
+
+    /* ---------- stage panels: the rail colour follows the stage's state ---------- */
+    .stage { background:var(--panel); border:2px solid var(--rail, var(--accent));
+             border-radius:12px; margin:0 0 24px; overflow:hidden; }
+    .stage.rail-idle { --rail:var(--idle-line); --num:var(--idle-line); --head:var(--idle-head); }
+    .stage.rail-ok   { --rail:var(--ok-line);   --num:var(--ok-line);   --head:var(--ok-head); }
+    .stage.rail-warn { --rail:var(--warn-line); --num:var(--warn-line); --head:var(--warn-head); }
+    .stage.rail-fail { --rail:var(--fail-line); --num:var(--fail-line); --head:var(--fail-head); }
+    .stage.rail-main { --rail:var(--accent);    --num:var(--accent);    --head:var(--accent-head); }
+    .stage-head { display:flex; align-items:center; gap:14px; padding:14px 18px;
+                  background:var(--head, var(--panel-head));
+                  border-bottom:1px solid color-mix(in srgb, var(--rail) 35%, transparent); }
+    .stage-num { flex:none; width:30px; height:30px; border-radius:8px; background:var(--num, var(--accent)); color:#fff;
+                 font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+    .stage-meta { flex:1; min-width:0; }
+    .stage-title { display:flex; align-items:center; gap:10px; font-size:17px; font-weight:700; margin:0; }
+    .stage-purpose { margin:3px 0 0; font-size:13px; color:var(--muted); max-width:70ch; }
+    .stage-action { flex:none; }
+    .stage-body { padding:16px 18px; }
+    .stage-body.flush { padding:0; }
+
+    /* ---------- badges ---------- */
+    .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; }
+    .b-ok,.b-done { background:var(--ok-soft); color:var(--ok); }
+    .b-running,.b-info { background:var(--accent-soft); color:#3a3aa8; }
+    .b-warn { background:var(--warn-soft); color:var(--warn); }
+    .b-fail,.b-failed { background:var(--fail-soft); color:var(--fail); }
+    .b-idle { background:#eeedf4; color:var(--muted); }
+
+    /* ---------- buttons + inputs ---------- */
+    button { padding:8px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff;
+             font:inherit; font-weight:600; cursor:pointer; }
     button.quiet { background:#fff; color:var(--fg); border:1px solid var(--line); }
-    button.danger { background:#fee2e2; color:#991b1b; }
-    .row { display:flex; gap:12px; } .row > * { flex:1; }
-    .inline { display:inline; } .inline button { margin:0 6px 0 0; }
-    th.releases { width:280px; }
-    .pick select { width:auto; padding:5px 8px; margin:4px 0; } .pick button { margin:4px 0 0; padding:6px 12px; }
-    .pick label { display:block; margin:6px 0; } .pick input[type=checkbox] { width:auto; }
-    details > summary { cursor:pointer; margin:24px 0 10px; font-size:16px; font-weight:600; }
-    .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
-    .b-ok,.b-done { background:#dcfce7; color:#166534; }
-    .b-running,.b-info { background:#dbeafe; color:#1e40af; }
-    .b-warn { background:#fef3c7; color:#92400e; }
-    .b-fail,.b-failed { background:#fee2e2; color:#991b1b; }
-    .muted { color:var(--muted); } .err { color:#991b1b; font-size:13px; }
-    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+    button.quiet:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+    button.caution { background:var(--warn-line); color:#fff; }
+    button.rollback { background:#fff; color:var(--warn); border:1px solid var(--warn-line); }
+    button.danger { background:var(--fail-soft); color:var(--fail); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    input[type=text],select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; background:#fff; }
+    .inline { display:inline; }
+
+    /* ---------- cards and plain tables (profiles list, runs, run pages) ---------- */
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px; margin-bottom:18px; }
+    table { width:100%; border-collapse:collapse; }
+    table.boxed { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    th,td { text-align:left; padding:12px 18px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); background:#fff; }
+    tr:last-child td { border-bottom:none; }
+    tbody tr:hover td { background:#faf9fd; }
+
+    /* ---------- run lines ---------- */
     .line { display:flex; gap:10px; padding:5px 0; border-bottom:1px solid var(--line); }
     .line:last-child { border-bottom:none; }
     .line .text { flex:1; white-space:pre-wrap; }
     .line.head { font-weight:700; margin-top:8px; }
-    .line.ok { color:#166534; } .line.warn { color:#92400e; } .line.fail { color:#991b1b; font-weight:600; }
-    .checks label { display:inline-block; margin-right:14px; font-size:14px; }
+    .line.ok { color:var(--ok); } .line.warn { color:var(--warn); } .line.fail { color:var(--fail); font-weight:600; }
 
-    /* --- page title + status strip --- */
-    .page-head { margin-bottom:22px; }
-    .page-head h1 { margin:0 0 12px; }
-    .status-strip { display:flex; flex-wrap:wrap; gap:8px 22px; padding:12px 16px;
-                    background:#fff; border:1px solid var(--line); border-radius:10px; }
-    .status-strip .item { display:flex; align-items:baseline; gap:8px; }
-    .status-strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
-    .status-strip .v { font-size:14px; color:var(--fg); }
+    /* ---------- apps table ---------- */
+    .table-wrap { overflow-x:auto; }
+    col.c-app { width:16%; } col.c-repo { width:30%; } col.c-image { width:22%; } col.c-rel { width:32%; }
+    td.app { font-weight:600; }
+    td.app .badge { margin-left:6px; }
+    td.repo .src { display:block; color:var(--muted); font-size:12px; }
+    td.image .tag { display:block; font-weight:600; }
+    td.image .digest { display:block; color:var(--muted); font-size:11.5px; }
+    td.rel .note { color:var(--muted); font-size:13px; }
 
-    /* --- numbered stage sections --- */
-    .stage { margin:0 0 30px; }
-    .stage-head { display:flex; align-items:flex-start; gap:14px; margin:0 0 14px; }
-    .stage-num { flex:none; width:28px; height:28px; border-radius:8px; background:var(--accent); color:#fff;
-                 font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; }
-    .stage-meta { flex:1; min-width:0; }
-    .stage-title { font-size:17px; font-weight:700; margin:0; }
-    .stage-purpose { margin:2px 0 0; font-size:13px; color:var(--muted); }
-    .stage-action { flex:none; align-self:center; }
-    .stage-action .inline button { margin:0; }
+    /* release picker: nothing enabled until a release is picked (and the gate ticked) */
+    .pick { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .pick select { width:auto; min-width:130px; padding:6px 8px; }
+    .pick button { padding:6px 12px; }
+    .gate { flex-basis:100%; display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px;
+            background:var(--warn-soft); border:1px solid #efbf9f; color:var(--warn); font-size:13px; }
+    .gate input { margin:0; width:auto; }
+    .gate.ok { background:var(--ok-soft); border-color:#9fd8d0; color:var(--ok); }
+    .dir { flex-basis:100%; font-size:12px; color:var(--warn); }
+    .dir:empty { display:none; }
 
-    /* --- calmer app table --- */
-    .apps-table th, .apps-table td { vertical-align:middle; }
-    .apps-table td.app { font-weight:600; }
-    .apps-table td.repo { color:var(--muted); }
-    .apps-table td.image { white-space:nowrap; }
-    .apps-table td.image .img-label { display:block; font-size:11px; text-transform:uppercase;
-                                       letter-spacing:.04em; color:var(--muted); margin-bottom:2px; }
-    .apps-table td.image .img-val { display:block; }
-    .apps-table td.image .img-val.mono { font-size:12px; }
+    /* ---------- install ---------- */
+    .checks { display:flex; flex-wrap:wrap; gap:8px; }
+    .checks label { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border:1px solid var(--line);
+                    border-radius:999px; font-size:14px; cursor:pointer; background:#fff; }
+    .checks label:has(input:checked) { border-color:var(--warn-line); background:var(--warn-soft); }
+    .checks input { margin:0; width:auto; }
+    .install-foot { display:flex; align-items:center; gap:14px; margin-top:16px; }
+    .install-foot .muted { font-size:13px; }
 
-    /* --- quiet last card (Install) --- */
-    .stage-quiet .card { background:#fbfbfc; }
-    .stage-quiet .stage-num { background:#e5e7eb; color:var(--muted); }
-
-    /* --- folded profile --- */
-    details.profile { margin-top:8px; }
-    details.profile > summary { margin:0 0 12px; font-size:14px; font-weight:600; color:var(--muted); }
+    /* ---------- profile ---------- */
+    details.profile { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+    details.profile > summary { cursor:pointer; padding:14px 18px; font-size:14px; font-weight:600; color:var(--muted); }
     details.profile > summary:hover { color:var(--fg); }
+    details.profile[open] > summary { border-bottom:1px solid var(--line); }
+    details.profile .inner { padding:4px 18px 18px; }
+    form.stack label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+    form.stack button { margin-top:16px; }
+    .row { display:flex; gap:12px; } .row > * { flex:1; }
+    .profile-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; }
+
+    @media (max-width:720px) {
+      header { padding:12px 16px; } main { padding:0 16px; }
+      .stage-head { flex-wrap:wrap; } .row { flex-direction:column; gap:0; }
+    }
   </style>
 </head>
-<body>
+<body class="{% if env %}env-{{ env }}{% endif %}">
   <header>
     <a href="/" class="brand">🧱 stack</a>
     <nav><a href="/">Profiles</a></nav>
+    {% if env %}<span class="env">{{ env }}</span>{% endif %}
     <span id="going">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>
   </header>
   <main>{% block content %}{% endblock %}</main>
+  <script>
+  // The page's only script: a picker enables its button once a release is picked (and the
+  // backup gate ticked), says "roll back" for a release older than the running one, and the
+  // Install button counts its ticks. Delegated, so it survives htmx swapping a picker in.
+  (function () {
+    function ver(t) { return (t || "").replace(/^v/, "").split(".").map(Number); }
+    function cmp(a, b) {
+      a = ver(a); b = ver(b);
+      for (var i = 0; i < Math.max(a.length, b.length); i++) { var d = (a[i] || 0) - (b[i] || 0); if (d) return d; }
+      return 0;
+    }
+    function syncPick(form) {
+      var sel = form.querySelector("select[name=tag]"), btn = form.querySelector("button[type=submit]");
+      var gate = form.querySelector(".gate input"), dir = form.querySelector(".dir");
+      if (!sel || !btn) return;
+      var tag = sel.value, cur = form.dataset.current;
+      var older = tag && cur && cmp(tag, cur) < 0;
+      btn.textContent = older ? "Roll back to " + tag : (tag ? "Upgrade to " + tag : "Upgrade to");
+      btn.className = older ? "rollback" : "quiet";
+      if (dir) dir.textContent = older ? "Older than running " + cur + "." : "";
+      if (gate) gate.closest(".gate").classList.toggle("ok", gate.checked);
+      btn.disabled = form.dataset.busy === "1" || !tag || (gate && !gate.checked);
+    }
+    function syncInstall(form) {
+      var n = form.querySelectorAll("input[name=apps]:checked").length;
+      var total = form.querySelectorAll("input[name=apps]").length;
+      var btn = form.querySelector("button[type=submit]");
+      if (btn) btn.textContent = n ? "Install " + n + " selected" : "Install all " + total;
+    }
+    document.addEventListener("change", function (e) {
+      var pick = e.target.closest("form.pick"); if (pick) syncPick(pick);
+      var inst = e.target.closest("form.install"); if (inst) syncInstall(inst);
+    });
+    function init(root) { root.querySelectorAll("form.pick").forEach(syncPick); root.querySelectorAll("form.install").forEach(syncInstall); }
+    init(document);
+    document.body.addEventListener("htmx:afterSwap", function (e) { init(e.target); });
+  })();
+  </script>
 </body>
 </html>

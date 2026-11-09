@@ -1,17 +1,18 @@
-{# One app's releases at source_image, newest first. Nothing is preselected:
-   the press upgrades, so the pick is a decision. The running pin is text. #}
+{# One app's releases at source_image, newest first, the running one left out.
+   Nothing is preselected and the button stays off until a release is picked
+   (and the backup gate ticked): the press upgrades, so the pick is a decision. #}
 {% if error %}<span class="err">{{ error }}</span>
-{% elif not tags %}<span class="muted">no version tags at {{ app.source_image }}</span>
+{% elif not tags %}<span class="note">no version tags at {{ app.source_image }}</span>
 {% else %}
-<form method="post" action="/p/{{ profile.name }}/upgrade-to" class="pick">
+<form method="post" action="/p/{{ profile.name }}/upgrade-to" class="pick" data-current="{{ current }}"{% if busy %} data-busy="1"{% endif %}>
   <input type="hidden" name="app" value="{{ app.name }}">
-  <div class="muted">runs {{ current or 'a digest-only pin' }}</div>
   <select name="tag">
     <option value="" selected>pick a release</option>
     {% for t in tags %}{% if t != current %}<option value="{{ t }}">{{ t }}</option>{% endif %}{% endfor %}
   </select>
-  {% if pvc %}<label><input type="checkbox" name="yes" value="true"> <span class="mono">{{ pvc }}</span> is backed up</label>{% endif %}
-  {% if busy %}<button type="submit" class="quiet" disabled>Upgrade to</button> <span class="muted">run #{{ busy.id }} going</span>
-  {% else %}<button type="submit" class="quiet">Upgrade to</button>{% endif %}
+  <button type="submit" class="quiet" disabled>Upgrade to</button>
+  {% if busy %}<span class="note">run #{{ busy.id }} going</span>{% endif %}
+  {% if pvc %}<label class="gate"><input type="checkbox" name="yes" value="true"> <span><span class="mono">{{ pvc }}</span> is backed up</span></label>{% endif %}
+  <div class="dir"></div>
 </form>
 {% endif %}

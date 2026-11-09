@@ -34,7 +34,30 @@ def short_image(image: str) -> str:
     return head.split("/")[-1] + (f"@{digest[:19]}…" if digest else "")
 
 
+def image_parts(image: str) -> tuple[str, str]:
+    """(tag, digest) of an image ref; either may be empty."""
+    _, tag, digest = ref_parts(image)
+    return tag, digest
+
+
 TEMPLATES.env.filters["short_image"] = short_image
+TEMPLATES.env.filters["image_parts"] = image_parts
+
+
+def environment(stack: Stack | None) -> str:
+    """The environment the stack's apps deploy to, when they agree on one;
+    the page wears it (prod in rose) so a press is never made on the wrong one."""
+    if stack is None:
+        return ""
+    envs = {a.environment for a in stack.apps}
+    return envs.pop() if len(envs) == 1 else ""
+
+
+def level_of(run) -> str:
+    """A check run's rail: idle until it has run, then its summary line's level."""
+    if run is None or run.finished is None or not run.lines:
+        return "idle"
+    return {"ok": "ok", "warn": "warn", "fail": "fail"}.get(run.lines[-1].level, "idle")
 
 
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
@@ -90,8 +113,9 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         stack, error = stack_or_error(profile)
         runs = [r for r in runner.runs.values() if r.profile == name]
         last_check = next((r for r in reversed(runs) if r.kind == "check"), None)
-        return page("profile.html", request, profile=profile, stack=stack, error=error,
-                    runs=list(reversed(runs)), last_check=last_check, busy=runner.active())
+        return page("profile.html", request, profile=profile, stack=stack, error=error, env=environment(stack),
+                    runs=list(reversed(runs)), last_check=last_check, check_level=level_of(last_check),
+                    busy=runner.active())
 
     @app.post("/p/{name}/check")
     def check(name: str):

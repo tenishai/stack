@@ -61,7 +61,8 @@ def test_a_profile_shows_its_stack_file_and_stores_only_paths(site):
     for word in ("litellm", "cabal", "liminal", "kobo", "gke_shaz-learning_us-central1_gojira-sandbox",
                  "tenishai/kobo", "Not checked since stack ui started"):
         assert word in page
-    assert page.index("Check") < page.index("Releases") < page.index("Install</button>")   # the page's order
+    assert page.index("Run check") < page.index("Releases") < page.index("Install all 4</button>")   # the page's order
+    assert 'class="env-dev"' in page and 'rail-idle' in page and "not checked" in page
     saved = site.profiles_path.read_text()
     assert "kubeconfig: ~/.kube-dogfood/config" in saved and "me@example.com" in saved
     assert "dogfood" in site.get("/").text
@@ -110,7 +111,8 @@ def test_check_renders_the_preflight_rows(site):
     page = site.get("/runs/1").text
     assert 'class="line ok"' in page and "logged in as tester" in page
     assert 'class="line fail"' in page and "no SSO grant for acme" in page
-    assert "1 missing, 0 to look at" in site.get("/p/dogfood").text
+    profile_page = site.get("/p/dogfood").text
+    assert "1 missing, 0 to look at" in profile_page and "rail-fail" in profile_page   # the stage wears the result
     assert '<div class="line head"><span class="text">gh</span>' in page   # rows grouped under their section
 
 
@@ -128,7 +130,7 @@ def test_one_run_at_a_time(tmp_path):
     second = site.post("/p/dogfood/install", data={"apps": ["kobo"]}, follow_redirects=False)
     assert second.status_code == 409 and "/runs/1" in second.text
     assert site.post("/p/dogfood/check", follow_redirects=False).status_code == 409
-    assert "run #1" in site.get("/p/dogfood").text and "Install</button>" not in site.get("/p/dogfood").text
+    assert "run #1" in site.get("/p/dogfood").text and 'class="caution">Install all' not in site.get("/p/dogfood").text
     assert 'hx-get="/runs/1/lines"' in site.get("/runs/1").text   # still polling
     gate.set()
     _wait(runner.runs[1])
@@ -188,10 +190,11 @@ def test_pick_a_release_pins_it_in_the_stack_file_and_runs_that_app(tmp_path):
     assert "kobo-data</span> is backed up" in frag                    # the gate names the PVC
     assert '<option value="" selected>pick a release</option>' in frag   # nothing preselected: the pick is the decision
     assert frag.index('value="v2.0"') < frag.index('value="v1.9"') < frag.index('value="v1.0"')
-    assert 'value="latest"' not in frag and 'value="sha-abc"' not in frag and "runs a digest-only pin" in frag
+    assert 'value="latest"' not in frag and 'value="sha-abc"' not in frag and 'data-current=""' in frag
+    assert '<button type="submit" class="quiet" disabled>Upgrade to</button>' in frag   # off until a pick (and the gate)
     lite = site.get("/p/t/tags/litellm").text
     assert 'value="1.1"' in lite and "backed up" not in lite           # no PVC: no gate to tick
-    assert 'value="1"' not in lite and "runs 1" in lite                 # the running tag is text, not a choice
+    assert 'value="1"' not in lite and 'data-current="1"' in lite       # the running tag is not a choice
     before = stack_file.read_text()
     # every refusal comes before anything is written
     assert "pick a release" in site.post("/p/t/upgrade-to", data={"app": "kobo", "tag": ""}).text
