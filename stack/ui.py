@@ -25,7 +25,16 @@ from stack.profiles import Profile, Profiles
 from stack.steps import ref_parts
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-ACTIONS = ("install", "upgrade")
+
+
+def short_image(image: str) -> str:
+    """`…/agent-images/kobo:v1@sha256:<64>` as `kobo:v1@sha256:<12>…`: the path is
+    the install's own registry and the digest a receipt, not reading matter."""
+    head, _, digest = image.partition("@")
+    return head.split("/")[-1] + (f"@{digest[:19]}…" if digest else "")
+
+
+TEMPLATES.env.filters["short_image"] = short_image
 
 
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
@@ -94,30 +103,36 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return HTMLResponse(error, status_code=422)
 
         def work(run: _runs.Run):
-            for c in preflight(stack, profile.target()):
+            section = None
+            checks = preflight(stack, profile.target())
+            for c in checks:
+                head = c.what.split(":")[0] if ":" in c.what else "tools"
+                if head != section:
+                    run.add("head", head)
+                    section = head
                 run.add(c.status, f"{c.what}" + (f" — {c.detail}" if c.detail else ""))
+            fails = sum(1 for c in checks if c.status == "fail")
+            warns = sum(1 for c in checks if c.status == "warn")
+            run.add("fail" if fails else "warn" if warns else "ok",
+                    f"{fails} missing, {warns} to look at" if fails or warns else "nothing missing")
 
         return _started(runner.start(name, "check", "preflight", work))
 
-    @app.post("/p/{name}/run")
-    def start_run(name: str, action: str = Form(), apps: list[str] = Form([]), yes: bool = Form(False)):
+    @app.post("/p/{name}/install")
+    def start_install(name: str, apps: list[str] = Form([])):
+        """Install the ticked apps, or every app. Upgrades go through the
+        table's release picker only: one surface, one decision per app."""
         profile = load_profile(name)
         if profile is None:
             return HTMLResponse(f"no profile {name!r}", status_code=404)
-        if action not in ACTIONS:
-            return HTMLResponse(f"no such action {action!r}", status_code=422)
-        if action == "upgrade" and not apps:
-            return HTMLResponse("tick the apps to upgrade (Install with none ticked is every app; "
-                                "Upgrade is not)", status_code=422)
         target = profile.target()
 
         def work(run: _runs.Run):
             # The press is the review: PRs this run opens on the install's own repos are merged by it.
-            report = perform(target, action, apps, merge_setup_prs=True, merge_pins=True, yes=yes, say=run.say)
-            run.add("ok", f"done: {len(report.done)} steps"
-                    + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+            report = perform(target, "install", apps, merge_setup_prs=True, merge_pins=True, say=run.say)
+            run.add("ok", f"done: {len(report.done)} steps")
 
-        return _started(runner.start(name, action, ", ".join(apps) or "every app", work))
+        return _started(runner.start(name, "install", ", ".join(apps) or "every app", work))
 
     @app.get("/p/{name}/tags/{app_name}", response_class=HTMLResponse)
     def tags(name: str, app_name: str, request: Request):
@@ -135,10 +150,10 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return page("_tags.html", request, profile=profile, app=app_, tags=[], current="", pvc="", error=str(exc))
         _, current, _ = ref_parts(app_.image)
         return page("_tags.html", request, profile=profile, app=app_, tags=tags, current=current,
-                    pvc=_runs.data_pvc(app_, github(env)), error="")
+                    pvc=_runs.data_pvc(app_, github(env)), busy=runner.active(), error="")
 
     @app.post("/p/{name}/upgrade-to")
-    def upgrade_to(name: str, app_name: str = Form(alias="app"), tag: str = Form(), yes: bool = Form(False)):
+    def upgrade_to(name: str, app_name: str = Form(alias="app"), tag: str = Form(""), yes: bool = Form(False)):
         """Pin the release in the stack file, then run the upgrade for that app."""
         profile = load_profile(name)
         if profile is None:
@@ -146,17 +161,26 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         if runner.active():
             return _started(None)
         target = profile.target()
-        try:
-            old, new = _runs.set_image(target, app_name, tag, crane(target.env))
-        except ToolError as exc:
-            return HTMLResponse(f"not pinned: {exc}", status_code=422)
+        stack, error = stack_or_error(profile)
+        app_ = next((a for a in stack.apps if a.name == app_name), None) if stack else None
+        if app_ is None:
+            return HTMLResponse(error or f"no app {app_name!r}", status_code=422)
+        # Every refusal comes before anything is written: a stack file that
+        # pins what the cluster doesn't run is drift nobody decided on.
+        if not tag:
+            return HTMLResponse(f"{app_name}: pick a release first", status_code=422)
+        if tag == ref_parts(app_.image)[1]:
+            return HTMLResponse(f"{app_name}: already pinned to {tag}", status_code=422)
+        pvc = _runs.data_pvc(app_, github(target.env))
+        if pvc and not yes:
+            return HTMLResponse(f"{app_name}: {pvc} holds its data; tick the backup box first", status_code=422)
 
         def work(run: _runs.Run):
+            old, new = _runs.set_image(target, app_name, tag, crane(target.env))   # refuses before writing
             run.add("info", f"{app_name}: stack file now pins {new} (was {old})")
             report = perform(target, "upgrade", [app_name], merge_setup_prs=True, merge_pins=True, yes=yes,
                              say=run.say)
-            run.add("ok", f"done: {len(report.done)} steps"
-                    + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+            run.add("ok", f"done: {len(report.done)} steps")
 
         return _started(runner.start(name, "upgrade", f"{app_name} to {tag}", work))
 
