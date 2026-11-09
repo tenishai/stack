@@ -51,7 +51,7 @@
   <header>
     <a href="/" class="brand">🧱 stack</a>
     <nav><a href="/">Profiles</a></nav>
-    {% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}
+    <span id="going">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>
   </header>
   <main>{% block content %}{% endblock %}</main>
 </body>

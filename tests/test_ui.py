@@ -93,7 +93,9 @@ def test_a_run_gets_the_profiles_target_and_shows_its_lines_and_its_stop(site):
     site.post("/p/dogfood/run", data={"action": "upgrade", "yes": "true"}, follow_redirects=False)
     _wait(site.runner.runs[2])
     assert site.calls[1][1:] == ("upgrade", [], False, True)
-    assert "done: 1 steps" in site.get("/runs/2/lines").text
+    lines = site.get("/runs/2/lines").text
+    assert "done: 1 steps" in lines
+    assert 'id="going" hx-swap-oob="true"></span>' in lines      # the header badge clears with the run
     assert "#2" in site.get("/p/dogfood").text and "upgrade · every app" in site.get("/p/dogfood").text
 
 

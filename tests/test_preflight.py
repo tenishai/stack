@@ -107,7 +107,7 @@ apps:
     assert _by(checks, "litellm: Gojira").status == "warn" and "Install" in _by(checks, "litellm: Gojira").detail
     assert "pull/9" in _by(checks, "cabal: Gojira").detail
     assert _by(checks, "cabal: pods").status == "warn" and "1/2" in _by(checks, "cabal: pods").detail
-    assert _by(checks, "cabal: image").status == "ok"          # built from source: shown, not judged
+    assert _by(checks, "cabal: image").detail == "runs cabal:dev"   # built from source: shown, not judged
     assert _by(checks, "kobo: Gojira").status == "ok"
     pin = _by(checks, "kobo: image")
     assert pin.status == "warn" and "Upgrade" in pin.detail and "sha256:aaaaaaaaaaaa" in pin.detail

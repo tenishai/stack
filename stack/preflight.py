@@ -122,8 +122,15 @@ def check_cluster(stack: Stack, kubectl: KubectlClient, gojira: GojiraClient) ->
         elif pinned:
             out.append(Check(f"{app.name}: image", "ok", f"runs the pinned {pinned[:19]}…"))
         else:
-            out.append(Check(f"{app.name}: image", "ok", running))
+            out.append(Check(f"{app.name}: image", "ok", f"runs {_short(running)}"))
     return out
+
+
+def _short(image: str) -> str:
+    """`…/apps/kobo:v1@sha256:<64>` as `kobo:v1@sha256:<12>…`: the registry path
+    is the install's own and the digest is a receipt, not reading matter."""
+    head, _, digest = image.partition("@")
+    return head.split("/")[-1] + (f"@{digest[:19]}…" if digest else "")
 
 
 def preflight(stack: Stack, target: Target, which: Callable[[str], str | None] = shutil.which) -> list[Check]:
