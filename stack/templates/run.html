@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}stack · run #{{ run.id }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Run #{{ run.id }}{% if env %} <span class="env">{{ env }}</span>{% endif %}</h1>
+  <div class="status-strip">
+    <div><span class="k">Profile</span><span class="v"><a href="/p/{{ run.profile }}">{{ run.profile }}</a></span></div>
+    <div><span class="k">What</span><span class="v">{{ run.kind }} · {{ run.what }}</span></div>
+    <div><span class="k">Status</span><span class="v"><span id="run-status" class="badge b-{{ run.status }}">{{ run.status }}</span></span></div>
+  </div>
+</div>
+{% include "_lines.html" %}
+{% endblock %}

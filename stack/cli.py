@@ -4,6 +4,7 @@
     stack install examples/dogfood.yaml --merge-setup-prs   # a first install of repos you own
     stack check examples/dogfood.yaml                  # parse the file, resolve nothing
     stack upgrade examples/dogfood.yaml [app …]        # converge changed image: pins (stack#12)
+    stack ui                                           # the same, behind buttons on localhost
 
 Needs on PATH: kubectl (on the install's context), gh (logged in), and for a
 stack with `bootstrap: cabal`, a `cbl` (--cbl, or $STACK_CBL). Repos named
@@ -32,9 +33,9 @@ def _shed_pythonpath() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _shed_pythonpath()
-    from stack.clients import CblCLI, CraneCLI, GhCLI, HttpGojira, KubectlCLI, ToolError
+    from stack.clients import ToolError
     from stack.model import Stack
-    from stack.steps import Clients, Installer, Options
+    from stack.runs import Target, perform
 
     p = argparse.ArgumentParser(prog="stack")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -56,9 +57,22 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--merge-setup-prs", action="store_true",
                    help="merge the regenerated setup PRs yourself")
     s.add_argument("-v", "--verbose", action="store_true")
+    s = sub.add_parser("ui", help="profiles, preflight, install and upgrade behind buttons (localhost)")
+    s.add_argument("--port", type=int, default=8097)
+    s.add_argument("--profiles", default="", help="the profiles file (default: ~/.config/stack/profiles.yaml)")
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(a, "verbose", False) else logging.WARNING,
                         format="%(message)s")
+
+    if a.cmd == "ui":
+        from stack.profiles import profiles_path
+        try:
+            from stack.ui import serve
+        except ImportError:
+            print("stack ui needs its extra: pip install 'tenish-stack[ui]'", file=sys.stderr)
+            return 2
+        serve(Path(a.profiles).expanduser() if a.profiles else profiles_path(), a.port)
+        return 0
 
     path = Path(a.stack_file).expanduser()
     try:
@@ -70,61 +84,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{path}: {len(stack.apps)} apps, in order: " + ", ".join(x.name for x in stack.apps))
         return 0
 
+    target = Target(stack_file=path, repos=Path(a.repos).expanduser() if getattr(a, "repos", "") else None,
+                    cbl=getattr(a, "cbl", ""), cabal_port=getattr(a, "cabal_port", 17497))
     try:
-        kubectl = KubectlCLI(stack.gojira.kube_context)
-        context = kubectl.current_context()
-        if not kubectl.namespace_exists(stack.gojira.namespace):
-            # Said before anything is touched: a stranger's current context can
-            # be any cluster at all, and a missing KUBECONFIG is the usual cause.
-            print(f"cannot reach Gojira: kubectl context {context!r} has no namespace "
-                  f"{stack.gojira.namespace!r}.\nIs KUBECONFIG the install's (the file `make install` wrote)? "
-                  "Pin the context with gojira.kube_context in the stack file.", file=sys.stderr)
-            return 1
-        print(f"Gojira: context {context}, namespace {stack.gojira.namespace}")
-        gojira = HttpGojira(kubectl, stack.gojira.url, stack.gojira.namespace)
+        report = perform(target, a.cmd, a.apps, merge_setup_prs=a.merge_setup_prs,
+                         yes=getattr(a, "yes", False))
     except ToolError as exc:
-        print(f"cannot reach Gojira: {exc}", file=sys.stderr)
+        print(f"\n{exc}" if str(exc).startswith("cannot reach Gojira") else f"\nstopped: {exc}", file=sys.stderr)
         return 1
-    if a.cmd == "upgrade":
-        try:
-            clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(), crane=CraneCLI())
-            opts = Options(stack_dir=path.parent, repo_root=path.parent,
-                           merge_setup_prs=a.merge_setup_prs, yes=a.yes)
-            report = Installer(stack, clients, opts).upgrade(a.apps)
-        except ToolError as exc:
-            print(f"\nstopped: {exc}", file=sys.stderr)
-            return 1
-        finally:
-            gojira.close()
-        print(f"\ndone: {len(report.done)} steps"
-              + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
-        return 0
-
-    cabal = None
-    cabal_app = next((x for x in stack.apps if x.bootstrap == "cabal"), None)
-    if cabal_app is not None and a.apps and cabal_app.name not in a.apps \
-            and not any(x.needs_cabal() for x in stack.apps if x.name in a.apps):
-        cabal_app = None  # the named apps neither are cabal nor mint on it
-    if cabal_app is not None:
-        if not a.cbl:
-            print("this stack bootstraps cabal: pass --cbl <path to cbl> (or STACK_CBL)", file=sys.stderr)
-            return 2
-        ns, svc, port = cabal_app.namespace, f"svc/{cabal_app.name}", a.cabal_port
-        cabal = CblCLI(a.cbl, f"http://127.0.0.1:{port}", str(path.parent / ".cabal-home"),
-                       forward=lambda: kubectl.port_forward(ns, svc, port, 80))
-    clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(), cabal=cabal)
-    opts = Options(stack_dir=path.parent, repo_root=Path(a.repos).expanduser() if a.repos else path.parent,
-                   merge_setup_prs=a.merge_setup_prs)
-    try:
-        report = Installer(stack, clients, opts).install(a.apps)
-    except ToolError as exc:
-        print(f"\nstopped: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        gojira.close()
-        if cabal is not None:
-            cabal.close()
-    print(f"\ndone: {len(report.done)} steps" + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+    print(f"\ndone: {len(report.done)} steps"
+          + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
     return 0
 
 

@@ -33,9 +33,21 @@ class ToolError(RuntimeError):
     """A tool said no. The message is the tool's own sentence, trimmed."""
 
 
-def _run(args: list[str], *, stdin: str | None = None, check: bool = True, timeout: int = 120) -> str:
+def tool_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment every tool runs in: the operator's own, minus a
+    PYTHONPATH (someone else's site-packages), plus what the caller pins —
+    `KUBECONFIG` and `CLOUDSDK_CORE_ACCOUNT` from a profile (`stack ui`), so
+    no shell export is relied on and no context accident can happen."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.update(extra or {})
+    return env
+
+
+def _run(args: list[str], *, stdin: str | None = None, check: bool = True, timeout: int = 120,
+         env: dict[str, str] | None = None) -> str:
     try:
-        proc = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=timeout,
+                              env=env or tool_env())
     except subprocess.TimeoutExpired:
         raise ToolError(f"{' '.join(args[:3])} did not answer in {timeout}s") from None
     if check and proc.returncode != 0:
@@ -167,8 +179,9 @@ class KubectlClient(Protocol):
 
 
 class KubectlCLI:
-    def __init__(self, context: str = ""):
+    def __init__(self, context: str = "", env: dict[str, str] | None = None):
         self._ctx = ["--context", context] if context else []
+        self._env = tool_env(env)
         if not shutil.which("kubectl"):
             raise ToolError("kubectl is not on PATH")
         # Every call answers or fails within seconds: a context whose cluster is
@@ -178,19 +191,22 @@ class KubectlCLI:
         self._base = ["kubectl", *self._ctx, "--request-timeout=20s"]
 
     def _k(self, *args: str, stdin: str | None = None, check: bool = True) -> str:
-        return _run([*self._base, *args], stdin=stdin, check=check, timeout=60)
+        return _run([*self._base, *args], stdin=stdin, check=check, timeout=60, env=self._env)
 
     def _exists(self, ns: str, kind: str, name: str) -> bool:
-        return subprocess.run([*self._base, "-n", ns, "get", kind, name], capture_output=True, timeout=60).returncode == 0
+        return subprocess.run([*self._base, "-n", ns, "get", kind, name], capture_output=True, timeout=60,
+                              env=self._env).returncode == 0
 
     def current_context(self) -> str:
         """The context calls go to: the configured one, else kubectl's current."""
         if self._ctx:
             return self._ctx[1]
-        return _run(["kubectl", "config", "current-context"], check=False, timeout=30).strip() or "(none)"
+        return _run(["kubectl", "config", "current-context"], check=False, timeout=30,
+                    env=self._env).strip() or "(none)"
 
     def namespace_exists(self, ns: str) -> bool:
-        return subprocess.run([*self._base, "get", "ns", ns], capture_output=True, timeout=60).returncode == 0
+        return subprocess.run([*self._base, "get", "ns", ns], capture_output=True, timeout=60,
+                              env=self._env).returncode == 0
 
     def secret_exists(self, ns, name) -> bool:
         return self._exists(ns, "secret", name)
@@ -239,7 +255,7 @@ class KubectlCLI:
 
     def port_forward(self, ns, target, local, remote) -> subprocess.Popen:
         return subprocess.Popen(["kubectl", *self._ctx, "-n", ns, "port-forward", target, f"{local}:{remote}"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._env)
 
 
 # --- gh ---------------------------------------------------------------------
@@ -255,12 +271,42 @@ class GitHubClient(Protocol):
     def merge_pr(self, pr_url: str) -> None: ...
     def dispatch(self, repo: str, workflow: str) -> None: ...
     def last_run(self, repo: str, workflow: str) -> tuple[str, str]: ...
+    def login(self) -> str: ...
+    def org_access(self, org: str) -> str: ...
 
 
 class GhCLI:
-    def __init__(self):
+    def __init__(self, env: dict[str, str] | None = None):
+        self._env = tool_env(env)
         if not shutil.which("gh"):
             raise ToolError("gh is not on PATH")
+
+    def _gh(self, *args: str, check: bool = True, timeout: int = 120) -> str:
+        return _run(["gh", *args], check=check, timeout=timeout, env=self._env)
+
+    def login(self) -> str:
+        """The account gh is logged in as, or a ToolError saying it isn't."""
+        out = self._gh("api", "user", "--jq", ".login", check=False).strip()
+        if not out:
+            raise ToolError("gh is not logged in (gh auth login)")
+        return out
+
+    def org_access(self, org: str) -> str:
+        """Why gh cannot see `org`'s repos, or "" when it can. SAML SSO never
+        says 401: a token without the org's SSO grant lists none of its repos
+        and `orgs/<org>` answers 403 naming SAML (gotcha, 2026-10-22)."""
+        proc = subprocess.run(["gh", "api", f"orgs/{org}"], capture_output=True, text=True,
+                              env=self._env, timeout=60)
+        if proc.returncode == 0:
+            return ""
+        if "SAML" in proc.stderr or "SSO" in proc.stderr:
+            return (f"your gh token has no SSO grant for {org}: on github.com, the token's "
+                    "Configure SSO -> Authorize, then `gh auth login --with-token`")
+        if "404" in proc.stderr:
+            user = subprocess.run(["gh", "api", f"users/{org}"], capture_output=True, text=True,
+                                  env=self._env, timeout=60)
+            return "" if user.returncode == 0 else f"gh finds no org or user named {org}"
+        return f"gh cannot read org {org}: {proc.stderr.strip()[:200]}"
 
     @staticmethod
     def _split(pr_url: str) -> tuple[str, str]:
@@ -270,11 +316,12 @@ class GhCLI:
         return m.group(1), m.group(2)
 
     def repo_exists(self, repo) -> bool:
-        return subprocess.run(["gh", "repo", "view", repo, "--json", "name"], capture_output=True).returncode == 0
+        return subprocess.run(["gh", "repo", "view", repo, "--json", "name"], capture_output=True,
+                              env=self._env).returncode == 0
 
     def create_repo(self, repo) -> None:
-        _run(["gh", "repo", "create", repo, "--private",
-              "--description", "Deploy repo for a published image, managed by the stack installer (Gojira image:)"])
+        self._gh("repo", "create", repo, "--private",
+                 "--description", "Deploy repo for a published image, managed by the stack installer (Gojira image:)")
 
     def push_files(self, repo, files, message) -> int:
         """Write `files` onto the repo's default branch and push; the number of
@@ -282,10 +329,11 @@ class GhCLI:
         this is a repo the installer made for exactly this content."""
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
-            _run(["gh", "repo", "clone", repo, tmp, "--", "--quiet"])
+            self._gh("repo", "clone", repo, tmp, "--", "--quiet")
             git = ["git", "-C", tmp]
-            if subprocess.run([*git, "rev-parse", "--verify", "HEAD"], capture_output=True).returncode != 0:
-                _run([*git, "symbolic-ref", "HEAD", "refs/heads/main"])      # an empty repo: start main
+            if subprocess.run([*git, "rev-parse", "--verify", "HEAD"], capture_output=True,
+                              env=self._env).returncode != 0:
+                _run([*git, "symbolic-ref", "HEAD", "refs/heads/main"], env=self._env)      # an empty repo: start main
             changed = 0
             for rel, content in files.items():
                 target = os.path.join(tmp, rel)
@@ -294,15 +342,15 @@ class GhCLI:
                     continue
                 with open(target, "w") as fh:
                     fh.write(content)
-                _run([*git, "add", "--", rel])
+                _run([*git, "add", "--", rel], env=self._env)
                 changed += 1
             if changed:
-                _run([*git, "commit", "-q", "-s", "-m", message])
-                _run([*git, "push", "-q", "-u", "origin", "HEAD"])
+                _run([*git, "commit", "-q", "-s", "-m", message], env=self._env)
+                _run([*git, "push", "-q", "-u", "origin", "HEAD"], env=self._env)
             return changed
 
     def read_file(self, repo, path) -> str:
-        out = _run(["gh", "api", f"repos/{repo}/contents/{path}", "--jq", ".content"])
+        out = self._gh("api", f"repos/{repo}/contents/{path}", "--jq", ".content")
         return base64.b64decode(out).decode()
 
     def open_pr(self, repo, files, title, body, branch) -> str:
@@ -310,42 +358,42 @@ class GhCLI:
         finds the open PR and answers its URL; the branch is force-pushed so
         the PR always shows the latest content."""
         import tempfile
-        existing = json.loads(_run(["gh", "pr", "list", "-R", repo, "--head", branch,
-                                    "--state", "open", "--json", "url"]))
+        existing = json.loads(self._gh("pr", "list", "-R", repo, "--head", branch,
+                                       "--state", "open", "--json", "url"))
         with tempfile.TemporaryDirectory() as tmp:
-            _run(["gh", "repo", "clone", repo, tmp, "--", "--quiet"])
+            self._gh("repo", "clone", repo, tmp, "--", "--quiet")
             git = ["git", "-C", tmp]
-            _run([*git, "checkout", "-q", "-B", branch])
+            _run([*git, "checkout", "-q", "-B", branch], env=self._env)
             for rel, content in files.items():
                 target = os.path.join(tmp, rel)
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with open(target, "w") as fh:
                     fh.write(content)
-                _run([*git, "add", "--", rel])
-            _run([*git, "commit", "-q", "-s", "-m", title])
-            _run([*git, "push", "-q", "-f", "-u", "origin", branch])
+                _run([*git, "add", "--", rel], env=self._env)
+            _run([*git, "commit", "-q", "-s", "-m", title], env=self._env)
+            _run([*git, "push", "-q", "-f", "-u", "origin", branch], env=self._env)
             if existing:
                 return existing[0]["url"]
-            out = _run(["gh", "pr", "create", "-R", repo, "--head", branch,
-                        "--title", title, "--body", body])
+            out = self._gh("pr", "create", "-R", repo, "--head", branch,
+                           "--title", title, "--body", body)
             return out.strip().splitlines()[-1]
 
     def pr_state(self, pr_url) -> str:
         repo, num = self._split(pr_url)
-        out = _run(["gh", "pr", "view", num, "-R", repo, "--json", "state,mergedAt"])
+        out = self._gh("pr", "view", num, "-R", repo, "--json", "state,mergedAt")
         d = json.loads(out)
         return "merged" if d.get("mergedAt") else d["state"].lower()
 
     def merge_pr(self, pr_url) -> None:
         repo, num = self._split(pr_url)
-        _run(["gh", "pr", "merge", num, "-R", repo, "--squash", "--delete-branch"])
+        self._gh("pr", "merge", num, "-R", repo, "--squash", "--delete-branch")
 
     def dispatch(self, repo, workflow) -> None:
-        _run(["gh", "workflow", "run", workflow, "-R", repo])
+        self._gh("workflow", "run", workflow, "-R", repo)
 
     def last_run(self, repo, workflow) -> tuple[str, str]:
-        out = _run(["gh", "run", "list", "-R", repo, "--workflow", workflow, "--limit", "1",
-                    "--json", "status,conclusion"])
+        out = self._gh("run", "list", "-R", repo, "--workflow", workflow, "--limit", "1",
+                       "--json", "status,conclusion")
         rows = json.loads(out)
         if not rows:
             return "none", ""
@@ -358,6 +406,7 @@ class GhCLI:
 class CraneClient(Protocol):
     def digest(self, ref: str) -> str: ...
     def copy(self, src: str, dst: str) -> None: ...
+    def tags(self, repo: str) -> list[str]: ...
 
 
 class CraneCLI:
@@ -365,15 +414,19 @@ class CraneCLI:
     docker daemon; its auth comes from the operator's own docker credential
     helpers (`gcloud auth configure-docker <host>` for Artifact Registry)."""
 
-    def __init__(self):
+    def __init__(self, env: dict[str, str] | None = None):
+        self._env = tool_env(env)
         if not shutil.which("crane"):
             raise ToolError("crane is not on PATH (brew install crane); `stack upgrade` copies images with it")
 
     def digest(self, ref) -> str:
-        return _run(["crane", "digest", ref]).strip()
+        return _run(["crane", "digest", ref], env=self._env).strip()
 
     def copy(self, src, dst) -> None:
-        _run(["crane", "cp", src, dst], timeout=600)
+        _run(["crane", "cp", src, dst], timeout=600, env=self._env)
+
+    def tags(self, repo) -> list[str]:
+        return _run(["crane", "ls", repo], env=self._env).split()
 
 
 # --- cabal (through its CLI, against a port-forward) ------------------------
@@ -391,19 +444,19 @@ class CblCLI:
     there); the operator's own ~/.cabal is never touched.
     """
 
-    def __init__(self, cbl: str, url: str, home: str, forward: Callable[[], subprocess.Popen] | None = None):
+    def __init__(self, cbl: str, url: str, home: str, forward: Callable[[], subprocess.Popen] | None = None,
+                 env: dict[str, str] | None = None):
         # The port-forward is opened on demand, right before each call, and
         # reopened if it is gone: it cannot be opened at startup (the Service
         # does not exist yet on a fresh install) and it dies when the pod it
         # reached restarts (which the fresh-code step does on purpose).
         self._cbl, self._url, self._home, self._forward = cbl, url, home, forward
+        self._extra = dict(env or {})
         self._pf: subprocess.Popen | None = None
         os.makedirs(home, mode=0o700, exist_ok=True)
 
     def _env(self) -> dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        env.update({"CABAL_HOME": self._home, "CABAL_URL": self._url})
-        return env
+        return tool_env({**self._extra, "CABAL_HOME": self._home, "CABAL_URL": self._url})
 
     def _port_open(self) -> bool:
         u = urlparse(self._url)

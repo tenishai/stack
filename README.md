@@ -107,6 +107,44 @@ directly, and your running the command is the gate. An app that carries a
 push's own CI run fails the contract check by design (the workflow still
 carries the old contract sha); the provision that follows regenerates it.
 
+## Buttons
+
+```
+pip install 'tenish-stack[ui]'
+stack ui            # http://127.0.0.1:8097
+```
+
+The same files behind buttons (stack#12). A **profile** is one install: a
+name and paths — the stack file, and the kubeconfig and cloud account every
+call is pinned to, so nothing depends on a shell export (the wrong-context
+class of accident lives entirely in the shell). The list is
+`~/.config/stack/profiles.yaml`, or `$STACK_PROFILES`; it holds paths, never
+contents. A profile's page shows what its stack file says and three buttons:
+
+- **Check** — preflight. Tools on PATH, every file the stack file names,
+  whether gh is logged in and its token sees the repos' orgs (a token with
+  no SSO grant lists nothing and says nothing), the kube context, and each
+  app's state on Gojira: its row, its pods, what it runs against what the
+  file pins. Each row names what is missing and whose hands fix it; the page
+  runs under your credentials and can grant nothing.
+- **Releases** — for an app with `source_image:`, the app table lists the
+  version tags published there, newest first. Pick one and press *Upgrade
+  to*: the page rewrites that app's `image:` line in the stack file to
+  `<repo>:<tag>@<digest>` (the digest read from the source; the one line a
+  person would have edited, the rest of the file untouched) and runs the
+  upgrade for that app. An app without `source_image:` says so in its row.
+- **Install** / **Upgrade** — the command line's engine, on the apps you
+  tick (Install with none ticked is every app; Upgrade needs its apps
+  named). Pressing is the review: the PRs a run opens on the install's own
+  repos (setup PRs, pins) are merged by the run and linked in its lines, so
+  the only gate left is the backup box for an app with a `data_mount`. The
+  run's lines appear as they happen; a stop is the same sentence the terminal
+  prints, in red. One run at a time, on localhost only; runs live while
+  `stack ui` does.
+
+The install flow for a cluster that has no Gojira yet (the GitHub App, the
+Secrets, the pauses where a person acts) is the next increment.
+
 ## What it needs
 
 `kubectl` on the install's context, `gh` logged in with access to the repos,

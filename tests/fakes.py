@@ -120,6 +120,16 @@ class FakeGitHub:
         # what a freshly opened pin PR's state reads as; "merged" lands its files
         self.open_pr_state = "merged"
         self.pr_files: dict[str, dict[str, str]] = {}
+        self.user = "tester"                  # "" = not logged in
+        self.org_denied: dict[str, str] = {}  # org -> why gh cannot see it
+
+    def login(self):
+        if not self.user:
+            raise ToolError("gh is not logged in (gh auth login)")
+        return self.user
+
+    def org_access(self, org):
+        return self.org_denied.get(org, "")
 
     def repo_exists(self, repo):
         return repo in self.repos
@@ -172,6 +182,12 @@ class FakeCrane:
     def __init__(self, digests: dict[str, str] | None = None):
         self.digests = digests or {}   # ref -> digest
         self.copied: list[tuple[str, str]] = []
+        self.tags_by: dict[str, list[str]] = {}   # repo -> what `crane ls` prints
+
+    def tags(self, repo):
+        if repo not in self.tags_by:
+            raise ToolError(f"{repo}: NAME_UNKNOWN")
+        return list(self.tags_by[repo])
 
     def digest(self, ref):
         if ref not in self.digests:

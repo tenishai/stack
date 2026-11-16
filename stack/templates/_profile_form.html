@@ -1,0 +1,18 @@
+{% set p = profile if profile is defined else none %}
+<form class="stack" method="post" action="/profiles">
+  <div class="row">
+    <div><label>Name</label><input type="text" name="name" value="{{ p.name if p else '' }}" {% if p %}readonly{% endif %} placeholder="prod"></div>
+    <div><label>Stack file</label><input type="text" name="stack_file" value="{{ p.stack_file if p else '' }}" placeholder="~/src/git/fubo/stack-files/prod.yaml"></div>
+  </div>
+  <div class="row">
+    <div><label>Kubeconfig (KUBECONFIG for every call)</label><input type="text" name="kubeconfig" value="{{ p.kubeconfig if p else '' }}" placeholder="~/.kube-agents-prod/config"></div>
+    <div><label>Cloud account (CLOUDSDK_CORE_ACCOUNT)</label><input type="text" name="cloud_account" value="{{ p.cloud_account if p else '' }}" placeholder="you@example.com"></div>
+  </div>
+  <div class="row">
+    <div><label>Repo clones (--repos)</label><input type="text" name="repos" value="{{ p.repos if p else '' }}" placeholder="~/src/git/stack"></div>
+    <div><label>cbl (for a stack that bootstraps cabal)</label><input type="text" name="cbl" value="{{ p.cbl if p else '' }}" placeholder="~/src/git/stack/cabal/.venv/bin/cbl"></div>
+  </div>
+  <label>Gojira env file (the install's gojira.env; used by the install flow later)</label>
+  <input type="text" name="env_file" value="{{ p.env_file if p else '' }}" placeholder="~/gojira-agents-prod.env">
+  <button type="submit">{{ 'Save' if p else 'Add' }}</button>
+</form>

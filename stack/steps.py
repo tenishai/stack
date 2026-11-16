@@ -97,6 +97,7 @@ class Options:
     iam_settle_seconds: float = 60.0     # a new deploy identity is usable after about this
     token_ttl_days: int = 90
     yes: bool = False                    # upgrade: the data_mount backup gate was answered
+    merge_pins: bool = False             # upgrade: merge the pin PR this run opens (the UI: the press is the review)
     say: object = print
 
 
@@ -114,6 +115,7 @@ class Installer:
     def __init__(self, stack: Stack, clients: Clients, opts: Options):
         self.stack, self.c, self.o = stack, clients, opts
         self.report = Report()
+        self._named: set[str] = set()
 
     # --- the whole run ------------------------------------------------------
 
@@ -123,6 +125,7 @@ class Installer:
         others' deploy repos from whatever their upstream clones hold today."""
         say = self.o.say
         names = names or []
+        self._named = set(names)
         unknown = sorted(set(names) - {a.name for a in self.stack.apps})
         if unknown:
             raise ToolError(f"not in the stack file: {', '.join(unknown)}")
@@ -150,7 +153,7 @@ class Installer:
     def install_app(self, app: App) -> AppRow:
         changed = self.ensure_deploy_repo(app) if app.deploy_repo else 0
         self.apply_cluster_objects(app)
-        row = self.connect(app, contract_changed=bool(changed))
+        row = self.connect(app, contract_changed=bool(changed), asked=app.name in self._named)
         row = self.wait_provisioned(row)
         if row.status == FAILED:
             # The first minute after an install is eventually consistent on
@@ -275,16 +278,21 @@ class Installer:
         doc["resources"] = resources + [n for n in names if n not in resources]
         files[kust_key] = yaml.safe_dump(doc, sort_keys=False)
 
-    def connect(self, app: App, contract_changed: bool = False) -> AppRow:
+    def connect(self, app: App, contract_changed: bool = False, asked: bool = False) -> AppRow:
         """An app already connected is provisioned again when it failed, or when
         this run changed its deploy repo: the push's own CI fails the contract
         check by design, and only a provision regenerates what deploys."""
         for row in self.c.gojira.apps():
             if row.name == app.name:
                 self.report.note(f"{app.name}: connected (app {row.id}, {row.status})", self.o.say)
-                if row.status == FAILED or contract_changed:
+                # An app asked for by name is converged, not just found: its
+                # contract may have gained what only a provision acts on (an
+                # identity: line already on the repo, 2026-11-09), and Gojira's
+                # contract-reading steps re-decide on every provision.
+                if row.status == FAILED or contract_changed or asked:
                     self.c.gojira.provision(row.id)
-                    why = "deploy repo changed" if contract_changed else "it had failed"
+                    why = ("deploy repo changed" if contract_changed
+                           else "it had failed" if row.status == FAILED else "asked for by name")
                     self.report.note(f"{app.name}: provision pressed again ({why})", self.o.say)
                     return self.c.gojira.app(row.id)
                 return row
@@ -354,12 +362,16 @@ class Installer:
         failed on "unable to acquire impersonated credentials"), so a failed
         first run is dispatched once more after the settle time."""
         _, total = self.c.kubectl.pods_ready(app.namespace)
-        if total:
+        status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
+        if total and conclusion != "failure":
             return
-        status, _ = self.c.github.last_run(app.connected_repo, WORKFLOW)
         if status not in ("queued", "in_progress"):
+            # Pods present but the last deploy failed: a provision that changed
+            # a platform fact (a repo variable, say) and no file leaves the
+            # workflow unrun, and what runs is still the old shape (2026-11-09).
+            why = "namespace was empty" if not total else "the last deploy had failed"
             self.c.github.dispatch(app.connected_repo, WORKFLOW)
-            self.report.note(f"{app.name}: deploy dispatched (namespace was empty)", self.o.say)
+            self.report.note(f"{app.name}: deploy dispatched ({why})", self.o.say)
         else:
             self.report.note(f"{app.name}: deploy already running", self.o.say)
         if self.wait_run(app) == "success":
@@ -454,6 +466,16 @@ class Installer:
         if not m:
             raise ToolError(f"{app.name}: no image: line in {app.deploy_repo}'s gojira.yaml")
         current = (DIGEST.search(m.group(0)) or [None, ""])[1]
+        if not current:
+            # The install wrote the deploy repo's line by tag. What that tag
+            # resolves to is the comparison; pinning the same bytes by digest
+            # is not an upgrade (an Upgrade pressed with nothing to upgrade,
+            # 2026-11-09, opened a pin PR for the image already running).
+            ref = m.group(0).split(":", 1)[1].split("#", 1)[0].strip()
+            try:
+                current = self.c.crane.digest(ref)
+            except ToolError:
+                current = ""
         if current == desired:
             self.report.note(f"{app.name}: already at {desired[:19]}…, nothing to do", self.o.say)
             return
@@ -521,6 +543,10 @@ class Installer:
                 "that follows regenerates the workflow.")
         url = self.c.github.open_pr(app.deploy_repo, {"gojira.yaml": new_text}, title, body,
                                     branch=f"upgrade/{app.name}-{desired[7:19]}")
+        if self.o.merge_pins:
+            self.c.github.merge_pr(url)
+            self.report.note(f"{app.name}: pin merged ({url})", self.o.say)
+            return
         self.o.say(f"  {app.name}: waiting for someone to merge {url}")
         self.report.waited_on.append(url)
         deadline = time.monotonic() + self.o.pr_wait_seconds
