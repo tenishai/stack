@@ -3,7 +3,7 @@ PYTHON ?= .venv/bin/python
 .PHONY: check install test
 
 install:
-	uv pip install -e ".[dev]"
+	uv sync --locked --extra dev --extra ui
 
 check:
 	$(PYTHON) -m pytest -q

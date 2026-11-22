@@ -169,7 +169,7 @@ key a running app already holds).
 ## Development
 
 ```
-uv venv .venv && uv pip install -e ".[dev]"
+uv venv .venv && uv sync --locked   # the lock is the pin; --locked refuses a stale one
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check stack tests
 ```

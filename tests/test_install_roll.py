@@ -111,6 +111,58 @@ def test_a_failed_post_merge_run_stops_with_the_actions_url(tmp_path):
     assert "https://github.com/org/kobo-deploy/actions" in str(result)
 
 
+def _direct_install(tmp_path, stack, *, gojira, kubectl, github, rollout_seconds=5.0, auto_merge=True, **opts):
+    """Build the installer and run the roll watch directly, per Ember's probe
+    script: the install's other steps are not the thing under test here."""
+    clients = Clients(gojira=gojira, kubectl=kubectl, github=github)
+    lines = []
+    o = Options(stack_dir=tmp_path, repo_root=tmp_path / "repos", poll_seconds=0,
+                pr_wait_seconds=0.5, rollout_seconds=rollout_seconds, bootstrap_seconds=0.5,
+                merge_setup_prs=auto_merge, say=lines.append, **opts)
+    inst = Installer(stack, clients, o)
+    try:
+        inst.wait_rolled(stack.apps[0], NEW_DIGEST, mark=True)
+        return inst, None, lines
+    except ToolError as e:
+        return inst, e, lines
+
+
+def test_probe_a_queued_at_the_mark_is_waited_not_stopped(tmp_path):
+    """Probe A (Ember): the run reads queued at the mark, in_progress on the
+    next poll, and the digest flips on the third. `queued`/`in_progress` are
+    waiting states, whatever they were at the mark — the watch waits and ends
+    "rolled"; it does not stop."""
+    stack = _stack(tmp_path, _app(f"reg.example/apps/kobo@{NEW_DIGEST}", "org/kobo-deploy"))
+    gojira, kubectl, github = FakeGojira(), FakeKubectl(), FakeGitHub()
+    kubectl.image_script["kobo"] = [f"reg.example/apps/kobo@{OLD_DIGEST}",
+                                    f"reg.example/apps/kobo@{OLD_DIGEST}",
+                                    f"reg.example/apps/kobo@{NEW_DIGEST}"]   # flip on poll 3
+    github.runs["org/kobo-deploy"] = ("queued", "")                          # queued at the mark
+    # the run goes in flight on the first image poll, before the flip (i=0); by
+    # the third poll the digest has landed and the watch returns before re-reading
+    kubectl.image_hooks["kobo"] = [lambda i: (github.runs.__setitem__("org/kobo-deploy", ("in_progress", ""))) if i == 0 else None]
+    inst, result, lines = _direct_install(tmp_path, stack, gojira=gojira, kubectl=kubectl, github=github)
+    assert result is None, f"probe A stopped the install: {result}"
+    assert any("rolled" in line for line in lines)
+
+
+def test_probe_b_earlier_run_at_the_mark_is_not_the_merge_run(tmp_path):
+    """Probe B (Ember, the 2026-11-10 kobo install): an earlier run completed
+    success at the mark; the merge's run appears queued on the next poll and the
+    digest flips later. The mark records state at the mark; a run in flight that
+    arrives after it is the thing to wait for, never a stop — "rolled"."""
+    stack = _stack(tmp_path, _app(f"reg.example/apps/kobo@{NEW_DIGEST}", "org/kobo-deploy"))
+    gojira, kubectl, github = FakeGojira(), FakeKubectl(), FakeGitHub()
+    kubectl.image_script["kobo"] = [f"reg.example/apps/kobo@{OLD_DIGEST}",
+                                    f"reg.example/apps/kobo@{OLD_DIGEST}",
+                                    f"reg.example/apps/kobo@{NEW_DIGEST}"]   # flip on poll 3
+    github.runs["org/kobo-deploy"] = ("completed", "success")                # the earlier run, at the mark
+    kubectl.image_hooks["kobo"] = [lambda i: github.runs.__setitem__("org/kobo-deploy", ("queued", "")) if i == 0 else None]
+    inst, result, lines = _direct_install(tmp_path, stack, gojira=gojira, kubectl=kubectl, github=github)
+    assert result is None, f"probe B stopped the install: {result}"
+    assert any("rolled" in line for line in lines)
+
+
 def test_source_app_install_is_unchanged(tmp_path):
     """No deploy_repo: install ends where it always did (pods ready); no
     digest waiting is invented for an app the registry does not hold."""

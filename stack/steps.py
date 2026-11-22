@@ -506,7 +506,10 @@ class Installer:
         row = self.settle_setup_pr(app, row)
         if row.status == FAILED:
             raise ToolError(f"{app.name}: provision failed; see the app's page on Gojira")
-        self.wait_rolled(app, desired)
+        # mark=True: the pin's own contract-check failure (expected) completed
+        # before the provision, so the mark (taken after settle_setup_pr) sees
+        # it as old, not new — the same one-job mark as install.
+        self.wait_rolled(app, desired, mark=True)
         self.report.note(f"{app.name}: upgraded {current[:19] + '…' if current else '(unpinned)'}"
                          f" -> {desired[:19]}…", self.o.say)
 
@@ -572,28 +575,25 @@ class Installer:
         """The digest the stack file pins for this app, "" when it pins
         none: install ends at pods-ready then, as source builds always have."""
         _, _, pinned = ref_parts(app.image)
-        if pinned:
-            return pinned
+        return pinned or ""
 
     def wait_rolled(self, app: App, digest: str, *, mark: bool = False) -> None:
         """Done when the deployment runs the digest and its pods are ready —
-        the receipt that matters, not a green run. Two ways it stops early,
-        per `mark`:
-        - the default (upgrade): a run that started after the pin and completed
-          without success. The pin push's own contract-check failure (expected,
-          finding #20's guard) completes before the provision, so it is not
-          "new" — the watch never sees it as a change.
-        - mark (install): the run's state is marked when the wait starts, and
-          any change of it toward failure — a completion that failed, or a run
-          still in flight that was not when the watch began — is a stop. The
-          page must not poll silently while the merge's run is burning.
+        the receipt that matters, not a green run.
+
+        One exit besides the deadline, per `mark`: a run that completed without
+        success *and changed* since the mark (the run's state when the watch
+        began). `queued`/`in_progress` are waiting states, whatever they were at
+        the mark — a run in flight is the thing to wait for, never a stop. The
+        mark's one job is to tell an old failure, already there when the watch
+        began, from a new one: the upgrade's pin-push contract-check failure is
+        the former (it completed before the provision), so it is not new.
         Without a digest (a source build, or a pin by tag alone) there is
         nothing to wait for."""
         if not digest:
             return
         marked = self.c.github.last_run(app.connected_repo, WORKFLOW) if mark else None
         deadline = time.monotonic() + self.o.rollout_seconds
-        saw_running = False
         while True:
             image = self.c.kubectl.deployed_image(app.namespace, app.name)
             ready, total = self.c.kubectl.pods_ready(app.namespace)
@@ -601,23 +601,8 @@ class Installer:
                 self.report.note(f"{app.name}: rolled, {ready}/{total} pods on {digest[:19]}…", self.o.say)
                 return
             status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
-            running = status in ("queued", "in_progress")
-            if running:
-                saw_running = True
-                if mark and marked is not None and (status, conclusion) != marked:
-                    # A run still in flight that was not at the mark: a new run
-                    # the merge started. It is not the failure's receipt yet,
-                    # but the page must not sit silently in it.
-                    raise ToolError(f"{app.name}: the deploy run is in flight (was {marked[0]} at the mark); "
-                                    f"read https://github.com/{app.connected_repo}/actions")
-            elif not mark and saw_running and status == "completed" and conclusion != "success":
-                # A run that started after the pin and completed without
-                # success: a failed post-merge deploy.
-                raise ToolError(f"{app.name}: the deploy run failed; read "
-                                f"https://github.com/{app.connected_repo}/actions")
-            elif mark and marked is not None and status == "completed" and conclusion != "success" \
+            if mark and marked is not None and status == "completed" and conclusion != "success" \
                     and (status, conclusion) != marked:
-                # The marked run completed without success while the watch was on.
                 raise ToolError(f"{app.name}: the deploy run failed; read "
                                 f"https://github.com/{app.connected_repo}/actions")
             if time.monotonic() > deadline:

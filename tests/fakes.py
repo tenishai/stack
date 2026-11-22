@@ -193,7 +193,7 @@ class FakeGitHub:
         settles; the steps' polls are what observe it)."""
         self.runs[repo] = ("in_progress", conclusion)
 
-    def complete(self, repo: str, conclusion: str) -> None:
+    def complete(self, repo: str, conclusion: str = "success") -> None:
         self.runs[repo] = ("completed", conclusion)
 
     def fail_next(self, repo: str) -> None:

@@ -3,29 +3,35 @@
 Handoff 01 (ui-increment-2), slice 1 of 6: Install waits for the roll (criterion 6).
 
 ## Done
-- Makefile with `check` (pytest + ruff) so the road-rule is enforceable.
+- Makefile `check` (pytest + ruff). `make install` now `uv sync --locked` (the
+  lock was in the commit but unread; Ember leaned lock + sync, matching gojira —
+  taken. README dev-setup line updated to match.)
 - Slice 1 — install's done is the rolled deployment:
-  - `stack/steps.py`: `install_app` now ends image apps (a `deploy_repo` with a
-    pinned digest) in `wait_rolled(app, digest, mark=True)`, the same roll watch
-    upgrade ends in. Done is the deployment running the digest the stack file
-    pins and its pods ready — not the post-merge run going green (the 2026-11-10
-    kobo memory change said done while the old pods were still up).
-  - `wait_rolled` gained `mark`: the run's state is marked when the watch begins,
-    and a change toward failure — a completion that failed, or a run still in
-    flight that was not — is a stop with the Actions URL. The upgrade's expected
-    exception is untouched: its pin-push contract-check failure completes before
-    the provision, so the watch sees no change (no false stop).
-  - `_pinned_digest(app)`: the digest a stack file pins, "" when it pins by tag
-    alone — those (and source builds) end where they always did, at pods-ready.
-  - `tests/test_install_roll.py`: four tests on fakes (done at the digest; waits
-    past the window with the URL; a failed post-merge run stops with the URL;
-    source apps unchanged).
-  - `tests/fakes.py`: `FakeKubectl` gained `image_script`/`image_polls`/
-    `image_hooks` (the deployed image per poll) and `FakeGitHub` gained
-    `leave_pending`/`complete` (pin a run's state for the watch to observe).
+  - `stack/steps.py`: `install_app` ends image apps in `wait_rolled(app, digest,
+    mark=True)`. Done is the deployment running the digest the stack file pins,
+    its pods ready — not the post-merge run going green.
+  - `tests/test_install_roll.py`: done at the digest; the window ends with the
+    URL; a failed post-merge run stops with the URL; source apps unchanged.
+  - `tests/fakes.py`: `FakeKubectl.image_script`/`image_polls`/`image_hooks`
+    (the deployed image per poll), `FakeGitHub.leave_pending`/`complete`.
 
-## Uncertain
-- Read "the run it starts" as the run the merged setup PR's /sync (provision)
-  dispatches — the same run upgrade_app waits on after its provision. If Ember
-  reads it as a distinct post-merge run, the watch is the same shape, just the
-  mark moves. Flagging for the review.
+## Ember's pass (handoff/02), resolved — slice 1 done
+- **The defect**: `mark=True` stopped on *any* change toward failure, including
+  `queued → in_progress` (probe A) and an earlier completed run being replaced by
+  the merge's queued run (probe B) — the 2026-11-10 kobo install shape.
+  Fixed: `queued`/`in_progress` are waiting states, whatever they were at the mark.
+  The mark does one job — tell an old failure (already there at the mark) from a
+  new one. The stop is now only a `completed`/non-success that differs from the mark.
+- **Two probe tests added** (both fail at b228f62, pass after): probe A (queued
+  at mark, in progress next, flip on poll 3 → "rolled") and probe B (earlier
+  success at mark, merge's run queued, flip later → "rolled").
+- **`_pinned_digest`** now returns `""` (was an implicit `None`).
+- **Upgrade path**: `upgrade_app` now calls `wait_rolled(app, desired, mark=True)`
+  too. Ember's edit removed the old default (non-mark) failure branch the upgrade
+  relied on; the upgrade has the same property as install (the pin-push's own
+  contract-check failure completes before the provision, so it is old, not new),
+  so `mark=True` is the same one-job mark, not a regression. Flagging in case
+  Ember scoped it deliberately.
+
+## Next
+- Slice 2 (the env file as a form) — does not depend on slice 1.
