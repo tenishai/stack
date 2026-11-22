@@ -1,18 +1,31 @@
 # STATUS
 
-Slice 1 of 6 (handoff/01-ui-increment-2.md): Install waits for the roll (criterion 6).
+Handoff 01 (ui-increment-2), slice 1 of 6: Install waits for the roll (criterion 6).
 
 ## Done
 - Makefile with `check` (pytest + ruff) so the road-rule is enforceable.
-
-## Next
-- Slice 1: after the setup PR merges, an image app's install waits for the
-  post-merge deploy run and for its pods to run the digest the stack file pins
-  (as upgrade's wait_rolled already does); a failed post-merge run stops with
-  the Actions URL. Tests on fakes first.
+- Slice 1 — install's done is the rolled deployment:
+  - `stack/steps.py`: `install_app` now ends image apps (a `deploy_repo` with a
+    pinned digest) in `wait_rolled(app, digest, mark=True)`, the same roll watch
+    upgrade ends in. Done is the deployment running the digest the stack file
+    pins and its pods ready — not the post-merge run going green (the 2026-11-10
+    kobo memory change said done while the old pods were still up).
+  - `wait_rolled` gained `mark`: the run's state is marked when the watch begins,
+    and a change toward failure — a completion that failed, or a run still in
+    flight that was not — is a stop with the Actions URL. The upgrade's expected
+    exception is untouched: its pin-push contract-check failure completes before
+    the provision, so the watch sees no change (no false stop).
+  - `_pinned_digest(app)`: the digest a stack file pins, "" when it pins by tag
+    alone — those (and source builds) end where they always did, at pods-ready.
+  - `tests/test_install_roll.py`: four tests on fakes (done at the digest; waits
+    past the window with the URL; a failed post-merge run stops with the URL;
+    source apps unchanged).
+  - `tests/fakes.py`: `FakeKubectl` gained `image_script`/`image_polls`/
+    `image_hooks` (the deployed image per poll) and `FakeGitHub` gained
+    `leave_pending`/`complete` (pin a run's state for the watch to observe).
 
 ## Uncertain
-- Whether "the run it starts" means the run dispatched by the post-merge
-  /sync (provision) — I am reading it as: after settle_setup_pr on an image
-  app, watch the connected repo's workflow run and the rollout, exactly the
-  way upgrade_app does after its provision.
+- Read "the run it starts" as the run the merged setup PR's /sync (provision)
+  dispatches — the same run upgrade_app waits on after its provision. If Ember
+  reads it as a distinct post-merge run, the watch is the same shape, just the
+  mark moves. Flagging for the review.

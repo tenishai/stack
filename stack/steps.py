@@ -173,6 +173,14 @@ class Installer:
         row = self.settle_setup_pr(app, row)
         self.ensure_deployed(app, row)
         self.wait_ready(app)
+        if app.deploy_repo:
+            # The run the merged setup PR (or the reconnect) starts is not the
+            # receipt: the 2026-11-10 kobo memory change said done while the old
+            # pods were still up. Done is the deployment running the image the
+            # stack file pins; a post-merge run that fails is a stop with the
+            # Actions URL. So the run's state is marked when the roll watch
+            # begins: a failure that arrives after it is the stop.
+            self.wait_rolled(app, self._pinned_digest(app), mark=True)
         if app.bootstrap == "cabal":
             if self.tokens_still_needed(app):
                 self.bootstrap_cabal(app)
@@ -560,12 +568,30 @@ class Installer:
             raise ToolError(f"{app.name}: the pin PR {url} is {state}")
         self.report.note(f"{app.name}: pin merged ({url})", self.o.say)
 
-    def wait_rolled(self, app: App, digest: str) -> None:
-        """Done when the deployment runs the new digest and its pods are ready
-        — the receipt that matters, not a green run. A deploy run that started
-        after the pin and completed without success fails fast; the pin push's
-        own contract-check failure (expected, finding #20's guard) never
-        started after the provision, so it doesn't trip this."""
+    def _pinned_digest(self, app: App) -> str:
+        """The digest the stack file pins for this app, "" when it pins
+        none: install ends at pods-ready then, as source builds always have."""
+        _, _, pinned = ref_parts(app.image)
+        if pinned:
+            return pinned
+
+    def wait_rolled(self, app: App, digest: str, *, mark: bool = False) -> None:
+        """Done when the deployment runs the digest and its pods are ready —
+        the receipt that matters, not a green run. Two ways it stops early,
+        per `mark`:
+        - the default (upgrade): a run that started after the pin and completed
+          without success. The pin push's own contract-check failure (expected,
+          finding #20's guard) completes before the provision, so it is not
+          "new" — the watch never sees it as a change.
+        - mark (install): the run's state is marked when the wait starts, and
+          any change of it toward failure — a completion that failed, or a run
+          still in flight that was not when the watch began — is a stop. The
+          page must not poll silently while the merge's run is burning.
+        Without a digest (a source build, or a pin by tag alone) there is
+        nothing to wait for."""
+        if not digest:
+            return
+        marked = self.c.github.last_run(app.connected_repo, WORKFLOW) if mark else None
         deadline = time.monotonic() + self.o.rollout_seconds
         saw_running = False
         while True:
@@ -575,9 +601,23 @@ class Installer:
                 self.report.note(f"{app.name}: rolled, {ready}/{total} pods on {digest[:19]}…", self.o.say)
                 return
             status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
-            if status in ("queued", "in_progress"):
+            running = status in ("queued", "in_progress")
+            if running:
                 saw_running = True
-            elif saw_running and status == "completed" and conclusion != "success":
+                if mark and marked is not None and (status, conclusion) != marked:
+                    # A run still in flight that was not at the mark: a new run
+                    # the merge started. It is not the failure's receipt yet,
+                    # but the page must not sit silently in it.
+                    raise ToolError(f"{app.name}: the deploy run is in flight (was {marked[0]} at the mark); "
+                                    f"read https://github.com/{app.connected_repo}/actions")
+            elif not mark and saw_running and status == "completed" and conclusion != "success":
+                # A run that started after the pin and completed without
+                # success: a failed post-merge deploy.
+                raise ToolError(f"{app.name}: the deploy run failed; read "
+                                f"https://github.com/{app.connected_repo}/actions")
+            elif mark and marked is not None and status == "completed" and conclusion != "success" \
+                    and (status, conclusion) != marked:
+                # The marked run completed without success while the watch was on.
                 raise ToolError(f"{app.name}: the deploy run failed; read "
                                 f"https://github.com/{app.connected_repo}/actions")
             if time.monotonic() > deadline:

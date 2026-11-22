@@ -60,7 +60,10 @@ class FakeKubectl:
         self.configmaps: dict[tuple[str, str], dict[str, str]] = {}
         self.applied: list[str] = []
         self.ready = ready or {}
-        self.images = images or {}   # ns -> what the deployment runs
+        self.images: dict[str, str] = images or {}   # ns -> what the deployment runs
+        self.image_polls: dict[str, int] = {}       # ns -> how many polls have read it
+        self.image_script: dict[str, list[str]] = {}   # ns -> the deployed image, per poll
+        self.image_hooks: dict[str, list] = {}        # ns -> fns called after each image read
         self.log_code = log_code
         self.code_after_restart = "FRESH1"
         self.calls: list[str] = []
@@ -96,6 +99,14 @@ class FakeKubectl:
         return self.ready.get(ns, (1, 1))
 
     def deployed_image(self, ns, deploy):
+        if ns in self.image_script:
+            i = self.image_polls.get(ns, 0)
+            self.image_polls[ns] = i + 1
+            seq = self.image_script[ns]
+            out = seq[min(i, len(seq) - 1)]
+            for hook in self.image_hooks.get(ns, []):
+                hook(i)
+            return out
         return self.images.get(ns, "")
 
     def logs_grep(self, ns, deploy, pattern, since="10m"):
@@ -176,6 +187,18 @@ class FakeGitHub:
 
     def last_run(self, repo, workflow):
         return self.runs.get(repo, ("completed", "success"))
+
+    def leave_pending(self, repo: str, conclusion: str = "") -> None:
+        """Tests: pin the repo's latest run as in flight (a run that never
+        settles; the steps' polls are what observe it)."""
+        self.runs[repo] = ("in_progress", conclusion)
+
+    def complete(self, repo: str, conclusion: str) -> None:
+        self.runs[repo] = ("completed", conclusion)
+
+    def fail_next(self, repo: str) -> None:
+        """Tests: the next dispatch on this repo completes without success."""
+        self.outcomes.setdefault(repo, []).append("failure")
 
 
 class FakeCrane:
