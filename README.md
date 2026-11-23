@@ -176,3 +176,9 @@ uv venv .venv && uv sync --locked   # the lock is the pin; --locked refuses a st
 
 The tests run the installer against fakes of the four hands (Gojira's API,
 kubectl, gh, cbl), including the checked-in example end to end.
+
+## License
+
+Copyright (c) 2026 tenish and the stack contributors
+
+MIT. See [LICENSE](LICENSE).
