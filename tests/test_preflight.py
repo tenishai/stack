@@ -69,20 +69,20 @@ apps:
 def test_github_names_the_sso_gap_and_the_repos_it_cannot_see(tmp_path):
     stack, _ = _stack(tmp_path, """
 apps:
-  - {name: litellm, repo: tenishai/litellm}
+  - {name: litellm, repo: tenishai/litellm-deploy}
   - {name: kobo, repo: tenishai/kobo, image: r/kobo:v1, deploy_repo: acme/infra-kobo-deploy}
 """)
-    gh = FakeGitHub(repos={"tenishai/litellm": {}})
+    gh = FakeGitHub(repos={"tenishai/litellm-deploy": {}})
     gh.org_denied["acme"] = "your gh token has no SSO grant for acme: Configure SSO -> Authorize"
     checks = check_github(stack, gh)
     assert _by(checks, "gh login").detail == "logged in as tester"
     assert _by(checks, "gh: tenishai").status == "ok"
     assert _by(checks, "gh: acme").status == "fail" and "SSO grant" in _by(checks, "gh: acme").detail
-    assert _by(checks, "litellm: tenishai/litellm").status == "ok"
+    assert _by(checks, "litellm: tenishai/litellm-deploy").status == "ok"
     deploy = _by(checks, "kobo: acme/infra-kobo-deploy")
     assert deploy.status == "warn" and "Install makes it" in deploy.detail
     gh.repos.clear()
-    assert _by(check_github(stack, gh), "litellm: tenishai/litellm").status == "fail"
+    assert _by(check_github(stack, gh), "litellm: tenishai/litellm-deploy").status == "fail"
     gh.user = ""
     assert [c.status for c in check_github(stack, gh)] == ["fail"]
 
