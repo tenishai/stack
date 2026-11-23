@@ -2,7 +2,7 @@
 <form class="stack" method="post" action="/profiles">
   <div class="row">
     <div><label>Name</label><input type="text" name="name" value="{{ p.name if p else '' }}" {% if p %}readonly{% endif %} placeholder="prod"></div>
-    <div><label>Stack file</label><input type="text" name="stack_file" value="{{ p.stack_file if p else '' }}" placeholder="~/src/git/fubo/stack-files/prod.yaml"></div>
+    <div><label>Stack file</label><input type="text" name="stack_file" value="{{ p.stack_file if p else '' }}" placeholder="~/stack/prod.yaml"></div>
   </div>
   <div class="row">
     <div><label>Kubeconfig (KUBECONFIG for every call)</label><input type="text" name="kubeconfig" value="{{ p.kubeconfig if p else '' }}" placeholder="~/.kube-agents-prod/config"></div>

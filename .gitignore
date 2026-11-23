@@ -10,3 +10,6 @@ dist/
 *.env
 .generated/
 .cabal-home/
+# agent session notes never go in git either
+CLAUDE.local.md
+scratch*
