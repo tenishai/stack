@@ -1,0 +1,92 @@
+name: dco
+
+# DCO sign-off check (CONTRIBUTING.md, "Developer Certificate of Origin").
+# Hosted runner, read-only token, no secrets. The step uses git and standard
+# shell tools, and executes nothing from the pull request, so fork PRs are safe
+# to run here and need no guard.
+#
+# Modelled on tenishai/techne's DCO step, with one difference: techne checks
+# fork PRs in a separate strict job, and this repo has a single job, so the
+# write-access exemption below also covers such a person's PR from a fork.
+# Two exemptions:
+# - WRITE ACCESS: a PR opened by someone with write access to this repo (admin,
+#   maintain or write, from any source: repo, team or org) skips the check;
+#   tenish's members all have it. The workflow asks GitHub's repository-
+#   permission API about the PR author (a login GitHub sets, not the PR).
+#   author_association is not used: the pull_request event payload carried
+#   CONTRIBUTOR for an org admin in some repos. If the lookup fails, the full
+#   check runs.
+# - DEPENDABOT: on a same-repo PR, a commit authored exactly as Dependabot's
+#   noreply address is skipped, because Dependabot cannot sign off under that
+#   address. A fork PR can forge any author, so it gets no exemption.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: DCO sign-off check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo unknown)
+          case "$perm" in
+            admin|maintain|write)
+              echo "DCO: skipped, $PR_AUTHOR has $perm access to this repo"
+              exit 0
+              ;;
+            unknown)
+              echo "DCO: the permission lookup for $PR_AUTHOR failed; running the full check"
+              ;;
+            *)
+              echo "DCO: checking, $PR_AUTHOR has $perm access"
+              ;;
+          esac
+          export GIT_NO_REPLACE_OBJECTS=1
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --quiet --unshallow origin "$BASE_SHA" "$HEAD_SHA"
+          else
+            git fetch --no-tags --quiet origin "$BASE_SHA" "$HEAD_SHA"
+          fi
+          commits=$(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")
+          if [ -z "$commits" ]; then
+            echo "::error::DCO: no non-merge commits in $BASE_SHA..$HEAD_SHA, so nothing was checked"
+            exit 1
+          fi
+          bad=0
+          skipped=0
+          for c in $commits; do
+            author=$(git log -1 --format='%an <%ae>' "$c")
+            if [ "$SAME_REPO" = true ] && [ "$author" = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ]; then
+              echo "DCO: skipping ${c:0:12} as a bot commit ($author)"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            # no `grep -q`: an early exit SIGPIPEs `tr`, and pipefail reads that as a miss
+            if ! git log -1 --format=%B "$c" | tr -d '\r' | grep -Fxi -- "Signed-off-by: $author" >/dev/null; then
+              echo "::error::DCO: commit ${c:0:12} has no 'Signed-off-by: $author' trailer"
+              bad=1
+            fi
+          done
+          if [ "$bad" -ne 0 ]; then
+            echo "Sign off with 'git commit -s'. To fix existing commits, see 'Developer Certificate of Origin' in CONTRIBUTING.md."
+            exit 1
+          fi
+          echo "DCO: $(($(echo "$commits" | wc -l | tr -d ' ') - skipped)) commit(s) signed off by their authors$( [ "$skipped" -gt 0 ] && printf ' (%s skipped as bot commits)' "$skipped" )"

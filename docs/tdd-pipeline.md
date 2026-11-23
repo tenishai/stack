@@ -84,8 +84,8 @@ The runner snapshots before each interaction and finds the element by text/role.
 
 ## Environment notes (so nobody has to rediscover these)
 
-- **Local model with vision:** llama.cpp `qwen3.8-27b` on 127.0.0.1:8889. It was running *without* vision; restart it with `--mmproj /Users/shaz/models/Qwen3.8-27B/mmproj-F16.gguf` to get image input. Also added `"image"` to the `input` array for `qaf-qwen` and `spark-unsloth` in `~/.pi/agent/models.json`. Reading screenshots works best by sending the image directly to `/v1/chat/completions` (pi `--print` with image input timed out; the direct API call returned a full description fine).
-- **pi `--offline`** disables startup npm installs. Required in `techne/scripts/pi_dogfood.sh` when offline — it spawns child pi sessions that otherwise hang on `npm install remote-pi` with no network (patched: `/Users/shaz/tmp/techne/techne/scripts/pi_dogfood.sh` now passes `--offline`). When online, `--offline` caused its own timeouts; drop it if network is up.
+- **Local model with vision:** llama.cpp `qwen3.8-27b` on 127.0.0.1:8889. It was running *without* vision; restart it with `--mmproj <models dir>/Qwen3.8-27B/mmproj-F16.gguf` to get image input. Also added `"image"` to the `input` array for the local and remote model entries in `~/.pi/agent/models.json`. Reading screenshots works best by sending the image directly to `/v1/chat/completions` (pi `--print` with image input timed out; the direct API call returned a full description fine).
+- **pi `--offline`** disables startup npm installs. Required in `techne/scripts/pi_dogfood.sh` when offline — it spawns child pi sessions that otherwise hang on `npm install remote-pi` with no network (patched: that checkout's `scripts/pi_dogfood.sh` now passes `--offline`). When online, `--offline` caused its own timeouts; drop it if network is up.
 - **colima** left running at end of session; `colima stop` at end of day.
 
 ## Artifacts
@@ -94,5 +94,5 @@ The runner snapshots before each interaction and finds the element by text/role.
 |------|-------|
 | Test plan v2 | `~/src/git/stack-installer/tests/e2e/stack-installer-e2e.yaml` |
 | Techne concurrency script (unrun) | `~/src/git/techne/scripts/concurrency_test.py` |
-| Dogfood `--offline` fix | `/Users/shaz/tmp/techne/techne/scripts/pi_dogfood.sh` |
+| Dogfood `--offline` fix | `<techne checkout>/scripts/pi_dogfood.sh` |
 | Test profile | `~/.config/stack/profiles.yaml` (the `test` entry) |
