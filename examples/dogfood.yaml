@@ -23,7 +23,7 @@ cluster:
 
 apps:
   - name: litellm
-    repo: tenishai/litellm
+    repo: tenishai/litellm-deploy
     secrets:
       litellm-secrets:
         LITELLM_MASTER_KEY: generate:32:litellm-master-key   # one value, shared with cabal below
