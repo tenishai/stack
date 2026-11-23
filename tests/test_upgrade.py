@@ -32,7 +32,8 @@ def _stack(tmp_path, apps, *, upgrade_gate="pr"):
     })
 
 
-def _upgrade(tmp_path, stack, *, gojira=None, kubectl=None, github=None, crane=None, **opts):
+def _upgrade(tmp_path, stack, *, gojira=None, kubectl=None, github=None, crane=None,
+             rollout_seconds=0.5, **opts):
     clients = Clients(
         gojira=gojira or FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")]),
         kubectl=kubectl or FakeKubectl(),
@@ -45,7 +46,7 @@ def _upgrade(tmp_path, stack, *, gojira=None, kubectl=None, github=None, crane=N
         repo_root=tmp_path / "repos",
         poll_seconds=0,
         pr_wait_seconds=0.5,
-        rollout_seconds=0.5,
+        rollout_seconds=rollout_seconds,
         bootstrap_seconds=0.5,
         say=lines.append,
         **opts,
@@ -215,3 +216,48 @@ def test_a_roll_that_never_lands_times_out(tmp_path):
 
     with pytest.raises(ToolError, match="pods not on"):
         _upgrade(tmp_path, stack, gojira=gojira, github=github, kubectl=kubectl, crane=crane)
+
+
+def test_a_failed_post_provision_run_stops_fast(tmp_path):
+    """Probe E (Ember, note 03): the pin's own contract-check failure is the
+    latest run when the roll watch begins (it is the mark); the merge's run
+    then goes in flight and fails, and its failure tuple EQUALS the mark. The
+    mark alone cannot tell them apart — the watch's `saw_running` (it saw the
+    run in flight under the watch) can. The upgrade stops with the Actions URL
+    in a couple of polls, not after the whole rollout window: the old
+    wait_rolled's fast-fail (stack#13), which the mark-only rule lost."""
+    import time
+
+    from stack.steps import Clients, Installer, Options
+    stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
+                               "image": "reg.example/apps/kobo:v2"}])
+    github = FakeGitHub(repos={"org/kobo-deploy": {"gojira.yaml": GOJIRA_YAML}})
+    # the pin push's contract check is the latest run, and it failed — so it is
+    # the mark the roll watch takes
+    github.runs["org/kobo-deploy"] = ("completed", "failure")
+    # the deployment never picks up the new digest
+    kubectl = FakeKubectl(images={"kobo": f"reg.example/apps/kobo@{OLD_DIGEST}"})
+    # while the watch polls, the merge's run goes in flight, then completes as a
+    # failure (the same tuple as the mark: only saw_running distinguishes it)
+    state = {"flip": False, "fail": False}
+    def _poll(n, a):
+        out = kubectl.images.get("kobo", "")
+        if not state["flip"]:
+            state["flip"] = True
+            github.runs["org/kobo-deploy"] = ("in_progress", "")
+        elif not state["fail"]:
+            state["fail"] = True
+            github.runs["org/kobo-deploy"] = ("completed", "failure")
+        return out
+    kubectl.deployed_image = _poll
+    o = Options(stack_dir=tmp_path, repo_root=tmp_path / "r", poll_seconds=0, pr_wait_seconds=0.5,
+                rollout_seconds=2.0, bootstrap_seconds=0.5, say=lambda s: None)
+    inst = Installer(stack, Clients(gojira=FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")]),
+                                    kubectl=kubectl, github=github,
+                                    crane=FakeCrane(digests={"reg.example/apps/kobo:v2": NEW_DIGEST})), o)
+    t0 = time.monotonic()
+    with pytest.raises(ToolError, match="deploy run failed") as exc:
+        inst.wait_rolled(stack.apps[0], NEW_DIGEST)
+    assert "https://github.com/org/kobo-deploy/actions" in str(exc.value)
+    # the stop arrives in a couple of polls, not after a rollout window
+    assert time.monotonic() - t0 < 0.5

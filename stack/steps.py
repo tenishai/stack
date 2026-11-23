@@ -180,7 +180,7 @@ class Installer:
             # stack file pins; a post-merge run that fails is a stop with the
             # Actions URL. So the run's state is marked when the roll watch
             # begins: a failure that arrives after it is the stop.
-            self.wait_rolled(app, self._pinned_digest(app), mark=True)
+            self.wait_rolled(app, self._pinned_digest(app))
         if app.bootstrap == "cabal":
             if self.tokens_still_needed(app):
                 self.bootstrap_cabal(app)
@@ -506,10 +506,11 @@ class Installer:
         row = self.settle_setup_pr(app, row)
         if row.status == FAILED:
             raise ToolError(f"{app.name}: provision failed; see the app's page on Gojira")
-        # mark=True: the pin's own contract-check failure (expected) completed
-        # before the provision, so the mark (taken after settle_setup_pr) sees
-        # it as old, not new — the same one-job mark as install.
-        self.wait_rolled(app, desired, mark=True)
+        # The mark is taken here, after settle_setup_pr: the pin's own
+        # contract-check failure (expected) completed before the provision, so
+        # it is the mark and the watch's `saw_running` is what tells the
+        # merge's run that fails after it from that expected one.
+        self.wait_rolled(app, desired)
         self.report.note(f"{app.name}: upgraded {current[:19] + '…' if current else '(unpinned)'}"
                          f" -> {desired[:19]}…", self.o.say)
 
@@ -577,23 +578,28 @@ class Installer:
         _, _, pinned = ref_parts(app.image)
         return pinned or ""
 
-    def wait_rolled(self, app: App, digest: str, *, mark: bool = False) -> None:
+    def wait_rolled(self, app: App, digest: str) -> None:
         """Done when the deployment runs the digest and its pods are ready —
-        the receipt that matters, not a green run.
-
-        One exit besides the deadline, per `mark`: a run that completed without
-        success *and changed* since the mark (the run's state when the watch
-        began). `queued`/`in_progress` are waiting states, whatever they were at
-        the mark — a run in flight is the thing to wait for, never a stop. The
-        mark's one job is to tell an old failure, already there when the watch
-        began, from a new one: the upgrade's pin-push contract-check failure is
-        the former (it completed before the provision), so it is not new.
-        Without a digest (a source build, or a pin by tag alone) there is
-        nothing to wait for."""
+        the receipt that matters, not a green run. Two exits besides the
+        deadline, both a stop with the Actions URL:
+        - the run's state is marked when the watch begins, and a completion that
+          failed and *differs from the mark* is a failure that was not there when
+          the watch began; OR
+        - the watch has seen the run `queued`/`in_progress` since the mark
+          (`saw_running`), so this completion belongs to a run that happened
+          under the watch — even when its tuple equals the mark (the upgrade's
+          mark IS the pin-push's contract-check failure, and the merge's run that
+          fails after it reads the same tuple; `saw_running` is what tells the
+          new failure from the old).
+        `queued`/`in_progress` are waiting states, whatever they were at the mark
+        — a run in flight is the thing to wait for, never a stop. Without a
+        digest (a source build, or a pin by tag alone) there is nothing to wait
+        for."""
         if not digest:
             return
-        marked = self.c.github.last_run(app.connected_repo, WORKFLOW) if mark else None
+        marked = self.c.github.last_run(app.connected_repo, WORKFLOW)
         deadline = time.monotonic() + self.o.rollout_seconds
+        saw_running = False
         while True:
             image = self.c.kubectl.deployed_image(app.namespace, app.name)
             ready, total = self.c.kubectl.pods_ready(app.namespace)
@@ -601,8 +607,10 @@ class Installer:
                 self.report.note(f"{app.name}: rolled, {ready}/{total} pods on {digest[:19]}…", self.o.say)
                 return
             status, conclusion = self.c.github.last_run(app.connected_repo, WORKFLOW)
-            if mark and marked is not None and status == "completed" and conclusion != "success" \
-                    and (status, conclusion) != marked:
+            if status in ("queued", "in_progress"):
+                saw_running = True
+            if status == "completed" and conclusion != "success" \
+                    and ((status, conclusion) != marked or saw_running):
                 raise ToolError(f"{app.name}: the deploy run failed; read "
                                 f"https://github.com/{app.connected_repo}/actions")
             if time.monotonic() > deadline:

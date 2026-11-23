@@ -121,7 +121,7 @@ def _direct_install(tmp_path, stack, *, gojira, kubectl, github, rollout_seconds
                 merge_setup_prs=auto_merge, say=lines.append, **opts)
     inst = Installer(stack, clients, o)
     try:
-        inst.wait_rolled(stack.apps[0], NEW_DIGEST, mark=True)
+        inst.wait_rolled(stack.apps[0], NEW_DIGEST)
         return inst, None, lines
     except ToolError as e:
         return inst, e, lines
