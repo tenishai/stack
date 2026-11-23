@@ -18,6 +18,21 @@ logs in, and mints the tokens the later apps need.
 
 Run it twice and the second run finds everything present and says so.
 
+## Quickstart
+
+```bash
+git clone https://github.com/tenishai/stack && cd stack
+uv venv .venv && uv sync --locked
+.venv/bin/stack install examples/dogfood.yaml --merge-setup-prs \
+  --repos <dir holding clones of the apps' repos> --cbl <path to cabal's cbl>
+```
+
+It needs a Gojira already installed and reachable from your current kube
+context, `gh` logged in to the org that owns the deploy repos, `gcloud` on the
+project, and the files the stack file names (a GitHub App key, a LiteLLM master
+key; see "What it needs"). Rerunning is safe: every step reads before it writes.
+`stack ui` puts the same steps behind buttons on `localhost:8097`.
+
 ## Why
 
 Bringing the stack up by hand on a fresh install took about 25 touches across
@@ -176,6 +191,12 @@ uv venv .venv && uv sync --locked   # the lock is the pin; --locked refuses a st
 
 The tests run the installer against fakes of the four hands (Gojira's API,
 kubectl, gh, cbl), including the checked-in example end to end.
+
+## Community
+
+[CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
+[SUPPORT.md](SUPPORT.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md),
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
