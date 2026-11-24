@@ -67,15 +67,22 @@ class _NoProj:
         return []
 
 
-def _k8s(ns_exists: bool = True, ready=(1, 1)):
-    """A kubectl-shaped fake with the slice-3 additions (namespace_exists, and
-    a gojira-version ConfigMap the version check reads)."""
+def _k8s(ns_exists: bool = True, ready=(1, 1), *, version: str | None = "v1.3.1", dead: bool = False):
+    """A kubectl-shaped fake. The version is where Gojira actually writes it:
+    ConfigMap `gojira-install`/`GOJIRA_VERSION` (bootstrap.sh), NOT `gojira-version`
+    /`version` — that one is never written. `dead` makes `namespace_exists` and
+    `pods_ready` raise (an unreadable cluster), for the unknown state."""
+    from stack.clients import ToolError
     from tests.fakes import FakeKubectl
 
     k = FakeKubectl(ready={NS: ready})
     if ns_exists:
         k.namespaces.add(NS)
-        k.configmaps[(NS, "gojira-version")] = {"version": "v1.2.3"}
+        if version is not None:
+            k.configmaps[(NS, "gojira-install")] = {"GOJIRA_VERSION": version}
+    if dead:
+        k.namespace_exists = lambda ns: (_ for _ in ()).throw(ToolError("cluster unreadable"))
+        k.pods_ready = lambda ns: (_ for _ in ()).throw(ToolError("cluster unreadable"))
     return k
 
 
@@ -133,13 +140,16 @@ def test_page_offers_install_gojira_when_empty(tmp_path):
 
 
 def test_page_hides_install_gojira_when_installed(tmp_path):
+    """Item 4(b): installed -> version + the same button, relabelled for what it
+    does ("Run install.sh again") — make install from a newer checkout is how Gojira
+    is upgraded, so the surface for it must stay."""
     site = _site(tmp_path, install=_fake_install(tmp_path), kubectl=_k8s(ns_exists=True), ns_exists=True)
     page = site.get("/p/prod").text
-    # the page knows a Gojira is already there (the new page state: its version),
-    # and offers no install: no button, no empty-cluster note
-    assert "v1.2.3" in page
+    # the page knows a Gojira is already there (its version, from gojira-install)
+    assert "v1.3.1" in page
     assert "is on this cluster" in page
-    assert "install-gojira" not in page
+    # and it still offers the re-run button, labelled for what it does
+    assert "Run install.sh again" in page
     assert "no Gojira on this cluster yet" not in page
 
 
@@ -231,4 +241,38 @@ def test_install_gojira_reports_the_go_jira_version_when_ready(tmp_path):
     site.post("/p/prod/install-gojira", follow_redirects=False)
     _wait(site.runner.runs[1])
     page = site.get("/runs/1").text
-    assert "v1.2.3" in page   # the version /healthz answers with
+    # criterion 4: the version, read where Gojira actually writes it
+    # (gojira-install/GOJIRA_VERSION — not the never-written gojira-version)
+    assert "v1.3.1" in page
+
+
+# --- unknown: a dead kubectl is neither empty nor installed (Ember 09 item 3) ---
+
+
+def test_dead_kubectl_is_unknown_not_empty(tmp_path):
+    """Item 3: an unreadable cluster (namespace_exists raises) is a third state —
+    unknown. The page says it could not read the cluster and offers no button and
+    no empty claim: it must not offer to install into a cluster it could not read."""
+    site = _site(tmp_path, install=_fake_install(tmp_path), kubectl=_k8s(dead=True))
+    page = site.get("/p/prod").text
+    assert "Could not read this cluster" in page
+    # neither the empty-state text nor an enabled install button (the action, not the phrase)
+    assert "no Gojira on this cluster yet" not in page
+    assert "/p/prod/install-gojira" not in page
+
+
+# --- namespace-only: the namespace exists but nothing answers (Ember 09 item 4a) ---
+
+
+def test_namespace_only_says_so_and_offers_install(tmp_path):
+    """Item 4(a): namespace gojira present but no pods (a half-failed install leaves
+    exactly this, as does any pre-v1.0.0 install). The page says so — "namespace
+    gojira exists, nothing answers" — and offers the button; it shows no version."""
+    site = _site(tmp_path, install=_fake_install(tmp_path),
+                 kubectl=_k8s(ns_exists=True, ready=(0, 0), version=None), ns_exists=True)
+    page = site.get("/p/prod").text
+    assert "namespace gojira exists, nothing answers" in page
+    assert "Install Gojira" in page
+    # no version claimed (the namespace is not a running Gojira)
+    assert "is on this cluster" not in page
+    assert "v1.3.1" not in page

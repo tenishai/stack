@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from stack.clients import GhCLI, GitHubClient, GojiraClient, KubectlClient, ToolError
+from stack.clients import GhCLI, GitHubClient, GojiraClient, KubectlCLI, KubectlClient, ToolError
 from stack.model import Stack
 from stack.runs import Target, open_gojira
 from stack.steps import DIGEST, ref_parts
@@ -98,7 +98,7 @@ def check_cluster(stack: Stack, kubectl: KubectlClient, gojira: GojiraClient) ->
     for app in stack.apps:
         row = rows.get(app.name)
         if row is None:
-            out.append(Check(f"{app.name}: Gojira", "warn", "not connected; Install does it"))
+            out.append(Check(f"{app.name}: Gojira", "warn", "not installed yet — Install Gojira first"))
             continue
         if row.status == "active":
             out.append(Check(f"{app.name}: Gojira", "ok", "active"))
@@ -133,12 +133,41 @@ def _short(image: str) -> str:
     return head.split("/")[-1] + (f"@{digest[:19]}…" if digest else "")
 
 
+class _NoGojira:
+    """A Gojira client for a cluster with no Gojira: no apps, nothing to close.
+    `check_cluster` gives every app the "not installed yet" row against it."""
+
+    def apps(self):
+        return []
+
+    def url(self):
+        return ""
+
+    def close(self):
+        pass
+
+
 def preflight(stack: Stack, target: Target, which: Callable[[str], str | None] = shutil.which) -> list[Check]:
     out = check_tools(stack, target, which) + check_files(stack, target)
     try:
         out += check_github(stack, GhCLI(target.env))
     except ToolError as exc:
         out.append(Check("gh login", "fail", str(exc)))
+    # The cluster row: a missing namespace is a different case from an unreadable
+    # context. List the namespaces first — a cluster that cannot be read at all
+    # (a stranger's context, a dead server) returns None and stays a fail; a
+    # reachable cluster with no Gojira namespace is a plain word (warn) and the app
+    # rows still run ("not installed yet — Install Gojira first"). `open_gojira`
+    # keeps raising for `perform`, the real install path.
+    try:
+        kubectl = KubectlCLI(stack.gojira.kube_context, env=target.env)
+        listed = kubectl.namespaces()
+    except ToolError:
+        listed = None
+    if listed is not None and stack.gojira.namespace not in listed:
+        out.append(Check("Gojira", "warn", "no Gojira on this cluster yet"))
+        out += check_cluster(stack, kubectl, _NoGojira())
+        return out
     try:
         kubectl, gojira = open_gojira(stack, target, say=lambda _: None)
     except ToolError as exc:

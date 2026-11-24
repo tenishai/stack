@@ -41,7 +41,29 @@
     {% else %}
     <p class="muted" style="margin:0">Not checked since stack ui started.</p>
     {% endif %}
-    {% if not gojira_installed %}
+    {% if gojira_state == "installed" %}
+    <p style="margin:0"><span class="badge b-ok">Gojira</span>
+      <span class="mono">{{ gojira_version }}</span>
+      <span class="muted">is on this cluster</span></p>
+    <form method="post" action="/p/{{ profile.name }}/install-gojira" class="inline" style="margin:4px 0 0">
+      <button type="submit" class="caution" {% if busy %}disabled{% endif %}>Run install.sh again</button>
+      <span class="muted">re-runs the checkout's scripts/install.sh under the env file — how Gojira itself is upgraded</span>
+    </form>
+    {% elif gojira_state == "namespace-only" %}
+    <div class="gojira-empty">
+      <p class="err" style="margin:0 0 6px">{{ gojira_note }}</p>
+      {% if profile.env_file and profile.gojira_repo %}
+      <form method="post" action="/p/{{ profile.name }}/install-gojira" class="inline">
+        <button type="submit" class="caution" {% if busy %}disabled{% endif %}>Install Gojira</button>
+        <span class="muted">runs the checkout's scripts/install.sh under the env file, as a run</span>
+      </form>
+      {% elif not profile.env_file %}
+      <p class="muted" style="margin:0">Set the profile's env file (<a href="/p/{{ profile.name }}/env">Gojira env form</a>) to install.</p>
+      {% else %}
+      <p class="muted" style="margin:0">Set the profile's Gojira checkout (Profile settings) to install.</p>
+      {% endif %}
+    </div>
+    {% elif gojira_state == "empty" %}
     <div class="gojira-empty">
       <p class="err" style="margin:0 0 6px">no Gojira on this cluster yet</p>
       {% if profile.env_file and profile.gojira_repo %}
@@ -54,12 +76,13 @@
       {% else %}
       <p class="muted" style="margin:0">Set the profile's Gojira checkout (Profile settings) to install.</p>
       {% endif %}
-      {% if gojira_note %}<p class="muted" style="margin:0">{{ gojira_note }}</p>{% endif %}
     </div>
-    {% elif gojira_version %}
-    <p style="margin:0"><span class="badge b-ok">Gojira</span>
-      <span class="mono">{{ gojira_version }}</span>
-      <span class="muted">is on this cluster</span></p>
+    {% elif gojira_state == "unknown" %}
+    <div class="gojira-empty">
+      <p class="err" style="margin:0">{{ gojira_note }}</p>
+      <p class="muted" style="margin:0">Could not read this cluster, so the page does not say whether Gojira is here.
+        The install is not offered: it would go into a cluster the page cannot see.</p>
+    </div>
     {% endif %}
   </div>
 </section>

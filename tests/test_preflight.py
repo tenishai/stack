@@ -138,3 +138,52 @@ apps:
     gojira = _by(checks, "Gojira")
     assert gojira.status == "fail" and "has no namespace 'gojira'" in gojira.detail and "KUBECONFIG" in gojira.detail
     assert not any(c.what.startswith("kobo: Gojira") for c in checks)
+
+
+def test_an_empty_cluster_is_a_plain_word_and_every_row_runs(tmp_path, monkeypatch):
+    """Criterion 2 (Ember 09): a reachable cluster with no gojira namespace is a
+    plain warn ("no Gojira on this cluster yet"), not the refusal, and every other
+    row still ran — the apps say "not installed yet — Install Gojira first". This is
+    the case `preflight` used to refuse on and return early (no app rows).
+    The fake kubectl answers `get ns --no-headers` with a list that lacks gojira,
+    so the cluster is reachable but empty."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    # reachable cluster: `get ns` lists (no gojira); `get ns gojira` not-found; current-context works
+    kubectl_body = """
+if [[ "$*" == *"--no-headers"* ]]; then echo "default kube-system"; exit 0; fi
+case "$*" in *current-context*) echo fake-context;; esac
+exit 1
+"""
+    (bindir / "kubectl").write_text("#!/bin/bash\n" + kubectl_body)
+    (bindir / "kubectl").chmod((bindir / "kubectl").stat().st_mode | stat.S_IEXEC)
+    (bindir / "gh").write_text("#!/bin/bash\nexit 1\n")
+    (bindir / "gh").chmod((bindir / "gh").stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.path.dirname(sys.executable)}")
+    stack, target = _stack(tmp_path, """
+apps:
+  - {name: kobo, repo: o/kobo, image: r/kobo:v1, deploy_repo: o/kobo-deploy}
+""")
+    checks = preflight(stack, target)
+    by = {c.what: c for c in checks}
+    # the Gojira row is a plain warn, not the refusal
+    assert by["Gojira"].status == "warn" and "no Gojira on this cluster yet" in by["Gojira"].detail
+    # every other row still ran
+    assert by["kubectl"].status == "ok"
+    # the app row says not installed yet — Install Gojira first (the new wording)
+    kobo = _by(checks, "kobo: Gojira")
+    assert kobo.status == "warn" and "not installed yet" in kobo.detail and "Install Gojira first" in kobo.detail
+
+    stack, target = _stack(tmp_path, """
+apps:
+  - {name: kobo, repo: o/kobo, image: r/kobo:v1, deploy_repo: o/kobo-deploy}
+""")
+    checks = preflight(stack, target)
+    by = {c.what: c for c in checks}
+    # the Gojira row is a plain warn, not the refusal
+    assert by["Gojira"].status == "warn" and "no Gojira on this cluster yet" in by["Gojira"].detail
+    # every other row still ran
+    assert by["kubectl"].status == "ok"
+    # the app row says not installed yet — Install Gojira first (the new wording)
+    kobo = _by(checks, "kobo: Gojira")
+    assert kobo.status == "warn" and "not installed yet" in kobo.detail and "Install Gojira first" in kobo.detail

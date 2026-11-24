@@ -1,7 +1,8 @@
 # STATUS
 
 Handoff 01 (ui-increment-2): slices 1–3 done. Slice 3 (criteria 2, 4):
-Check on an empty cluster + Install Gojira.
+Check on an empty cluster + Install Gojira. Ember 09's three re-provings applied
+(phantom version, hidden button, the check wording + a fourth page state).
 
 ## Done
 - Makefile `check` (pytest + ruff). `make install` now `uv sync --locked`.
@@ -36,7 +37,24 @@ Check on an empty cluster + Install Gojira.
     button then, and shows the running version when a Gojira is there.
   - `stack/templates/_profile_form.html` (checkout field), `profile.html`
     (the Gojira row: empty-state + button / installed version).
-  - `tests/test_install_gojira.py` (10), `tests/fakes.py` (`configmap_value`).
+  - `tests/test_install_gojira.py` (12), `tests/fakes.py` (`configmap_value`,
+    `namespaces`), `tests/test_preflight.py` (empty-cluster check).
+  - **Ember 09 applied** (the three re-provings, each failing at `f6fc666`):
+    1. *The version was phantom* — nothing in Gojira ever writes the `gojira-version`
+       ConfigMap (no manifests, no script); that read returned "" after a successful
+       install. Now read where Gojira actually reports it: `/healthz` ("version")
+       primarily, the `gojira-install`/`GOJIRA_VERSION` ConfigMap (what `bootstrap.sh`
+       writes, `bootstrap.sh:148-150`) as fallback, "running, version unknown" as last
+       resort.
+    2. *The installed state kept the button* — it now says "Gojira v1.3.1 is on this
+       cluster" and the button relabels **Run install.sh again**: *make install* from a
+       newer checkout is how Gojira is upgraded, so the surface for it stays.
+    3. *The check wording + a third state* — a missing namespace is a *warn*
+       ("no Gojira on this cluster yet") with every app row still running ("not
+       installed yet — Install Gojira first"), distinct from a dead kubectl (still a
+       *fail*). The page gains a fourth state, *unknown* (unreadable cluster: no
+       state, no button). The `namespaces()` list (None = unreadable) is what tells
+       the empty case from the dead one.
 
 ## The mark + saw_running rule (final, note 03)
 
@@ -203,7 +221,28 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   reports `(ready, total)`.
 
 ## Test count
-125 passed, ruff clean.
+128 passed, ruff clean.
+
+## Ember's pass (handoff/09): slice 3 — the version, the button, the states
+- **Verdict.** The direction (a *button that runs the install*, not a page that
+  pretends the engine consumed the env file) stands. Three things must be re-proven.
+- **Item 1 — the check wording.** A missing namespace is a *warn* ("no Gojira on
+  this cluster yet"), not a fail, and every app row still runs ("not installed yet
+  — Install Gojira first"); a dead kubectl is still a *fail*. Implemented in
+  `preflight` via `KubectlCLI.namespaces()` (a reachable list = the cluster answered;
+  None = it did not), so the empty case and the dead case are distinct.
+- **Item 2 — the version was phantom.** Nothing in Gojira writes the `gojira-version`
+  ConfigMap; that read returned "" after a successful install. Now: `/healthz`
+  ("version") → `gojira-install`/`GOJIRA_VERSION` (what bootstrap.sh writes) →
+  "running, version unknown". New `GojiraClient.health()`.
+- **Item 3 — the third state.** The page gains *unknown*: an unreadable cluster shows
+  "Could not read this cluster" and offers no button and no empty claim.
+- **Item 4 — the installed state keeps the button.** "Gojira v1.3.1 is on this
+  cluster" + **Run install.sh again** (a newer checkout's install.sh is how Gojira is
+  upgraded). And *namespace-only* (a half-failed install leaves exactly this, as does
+  any pre-v1.0.0 install): "namespace gojira exists, nothing answers" + the button,
+  no version. The four states: empty → button; namespace-only → button; installed →
+  version + re-run; unknown → no claim, no button.
 
 ## Next
 - Slice 4 (if any). Same rules: tests that fail at the parent commit, `make check`

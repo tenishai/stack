@@ -154,24 +154,38 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         stack, error = stack_or_error(profile)
         runs = [r for r in runner.runs.values() if r.profile == name]
         last_check = next((r for r in reversed(runs) if r.kind == "check"), None)
-        # Slice 3: is there a Gojira on this cluster yet? The Install Gojira button
-        # shows only when there is not. A dead kubectl is a note, not a page error,
-        # and an installed-looking page never offers to install again.
-        gojira_installed = False
-        gojira_note = ""
+        # Slice 3 (Ember 09): three Gojira states, not two —
+        #   installed:    namespace + pods ready + a version  -> version + re-run button
+        #   namespace-only: namespace exists but nothing answers -> say so + button
+        #   empty:        no namespace                       -> "no Gojira yet" + button
+        #   unknown:      kubectl itself is unreadable       -> note only, no button
+        # A dead kubectl must never render the empty-state nor an enabled button
+        # (the page would be offering to install into a cluster it could not read).
+        gojira_state = "unknown"   # installed | namespace-only | empty | unknown
         gojira_version = ""
+        gojira_note = ""
+        ns = stack.gojira.namespace if stack is not None else "gojira"
         if stack is not None:
             try:
                 kc = kubectl(env=profile.target().env)
-                gojira_installed = kc.namespace_exists(stack.gojira.namespace)
-                if gojira_installed:
-                    gojira_version = _gojira_version(kc, stack.gojira.namespace)
+                if kc.namespace_exists(ns):
+                    ready, total = kc.pods_ready(ns)
+                    if total and ready == total:
+                        gojira_state = "installed"
+                        gojira_version = _gojira_version(kc, ns)
+                    else:
+                        gojira_state = "namespace-only"
+                        gojira_note = (f"namespace {ns} exists, nothing answers"
+                                       + (f" ({ready}/{total} pods ready)" if total else " (no pods)"))
+                else:
+                    gojira_state = "empty"
             except ToolError:
+                gojira_state = "unknown"
                 gojira_note = f"could not read the cluster in {profile.kubeconfig or 'the current context'}"
         return page("profile.html", request, profile=profile, stack=stack, error=error, env=environment(stack),
                     runs=list(reversed(runs)), last_check=last_check, check_level=level_of(last_check),
-                    busy=runner.active(), gojira_installed=gojira_installed, gojira_note=gojira_note,
-                    gojira_version=gojira_version)
+                    busy=runner.active(), gojira_state=gojira_state, gojira_version=gojira_version,
+                    gojira_note=gojira_note)
 
     @app.post("/p/{name}/check")
     def check(name: str, request: Request):
@@ -394,24 +408,35 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                 run.ok = False
                 return
             run.add("ok", f"{ready}/{total} Gojira pods ready")
-            version = _gojira_version(kc, ns)
-            if version:
-                run.add("ok", f"Gojira {version} (/healthz)")
+            version = _gojira_version(kc, ns)   # kubectl-only here: gojira-install/GOJIRA_VERSION
+            if version and version != "running, version unknown":
+                run.add("ok", f"Gojira {version}")
             else:
                 run.add("warn", "Gojira is up; could not read its version")
 
         return _started(request, runner.start(name, "install.gojira", "Gojira (scripts/install.sh)", work))
 
-    def _gojira_version(kubectl, ns: str) -> str:
-        """The version /healthz answers with, read where Gojira keeps it (the
-        gojira-version ConfigMap). Empty when it is not there yet."""
+    def _gojira_version(kubectl, ns: str, gojira=None) -> str:
+        """The running version, read where Gojira actually puts it. `GET /healthz`
+        answers {"ok": true, "version": ...} (gojira web/__init__.py); the ConfigMap
+        Gojira writes is `gojira-install`/`GOJIRA_VERSION` (bootstrap.sh), not
+        `gojira-version`/`version` — that one is never written, so it was the wrong
+        source. Installs older than v1.0.0 have neither: "running, version unknown",
+        never a blank."""
         try:
-            if not kubectl.configmap_exists(ns, "gojira-version"):
-                return ""
-            data = kubectl.configmap_value(ns, "gojira-version", "version")
-            return data or ""
+            if gojira is not None:
+                v = (gojira.health() or {}).get("version")
+                if v:
+                    return v
         except ToolError:
-            return ""
+            pass
+        try:
+            v = kubectl.configmap_value(ns, "gojira-install", "GOJIRA_VERSION")
+            if v:
+                return v
+        except ToolError:
+            pass
+        return "running, version unknown"
 
     def _run_install(repo: Path, env: dict[str, str], run: _runs.Run) -> tuple[str, int]:
         """Run the checkout's scripts/install.sh as a subprocess, streaming its

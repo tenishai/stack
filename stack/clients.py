@@ -76,6 +76,7 @@ class GojiraClient(Protocol):
     def provision(self, app_id: int) -> None: ...
     def sync(self, app_id: int) -> AppRow: ...
     def api_token(self) -> str: ...
+    def health(self) -> dict: ...
 
 
 class HttpGojira:
@@ -114,6 +115,11 @@ class HttpGojira:
 
     def api_token(self) -> str:
         return self._token
+
+    def health(self) -> dict:
+        # identity-exempt (the kubelet probe carries no IAP); carries the running
+        # version so a reader with curl learns what this is without kubectl
+        return self._http.get("/healthz").json()
 
     def clusters(self) -> list[dict]:
         return self._http.get("/api/v1/clusters").json()["clusters"]
@@ -166,6 +172,7 @@ class KubectlClient(Protocol):
     def current_context(self) -> str: ...
     def list_contexts(self) -> list[str]: ...
     def namespace_exists(self, ns: str) -> bool: ...
+    def namespaces(self) -> list[str] | None: ...
     def secret_exists(self, ns: str, name: str) -> bool: ...
     def secret_value(self, ns: str, name: str, key: str) -> str: ...
     def apply_secret(self, ns: str, name: str, data: dict[str, str]) -> None: ...
@@ -222,6 +229,18 @@ class KubectlCLI:
     def namespace_exists(self, ns: str) -> bool:
         return subprocess.run([*self._base, "get", "ns", ns], capture_output=True, timeout=60,
                               env=self._env).returncode == 0
+
+    def namespaces(self) -> list[str] | None:
+        """Every namespace on the cluster, or None when the cluster cannot be read
+        at all (a dead server, a stranger's context). A reachable cluster with no
+        Gojira namespace lists fine and is not in it — that is the empty case, not
+        the unreadable one."""
+        r = subprocess.run([*self._base, "get", "ns", "--no-headers"], capture_output=True,
+                           timeout=60, env=self._env)
+        if r.returncode != 0:
+            return None
+        return [ln.split()[0] for ln in r.stdout.splitlines()
+                if ln.strip() and ln.split()[0] != "NAME"]
 
     def secret_exists(self, ns, name) -> bool:
         return self._exists(ns, "secret", name)

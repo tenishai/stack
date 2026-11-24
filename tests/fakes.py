@@ -6,10 +6,12 @@ from stack.clients import AppRow, ToolError
 
 
 class FakeGojira:
-    def __init__(self, apps: list[AppRow] | None = None, clusters: list[dict] | None = None):
+    def __init__(self, apps: list[AppRow] | None = None, clusters: list[dict] | None = None,
+                 version: str = "v1.3.1"):
         self.connected: dict[str, str] = {}   # app name -> repo it was connected with
         self._apps = {a.id: a for a in (apps or [])}
         self._clusters = clusters or []
+        self.version = version
         self.calls: list[str] = []
         # what a fresh connect comes back as, by app name (default awaiting_pr with a PR)
         self.connect_outcome: dict[str, tuple[str, str]] = {}
@@ -18,6 +20,10 @@ class FakeGojira:
 
     def api_token(self) -> str:
         return "tok-123"
+
+    def health(self):
+        # the /healthz shape Gojira serves: {"ok": true, "version": ...}
+        return {"ok": True, "version": self.version}
 
     def clusters(self):
         return list(self._clusters)
@@ -76,6 +82,10 @@ class FakeKubectl:
 
     def namespace_exists(self, ns):
         return ns in self.namespaces
+
+    def namespaces(self):
+        # the fake cluster is always reachable, so a reachable list, never None
+        return sorted(self.namespaces)
 
     def secret_exists(self, ns, name):
         return (ns, name) in self.secrets
