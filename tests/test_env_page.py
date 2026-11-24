@@ -165,6 +165,14 @@ def test_env_page_shows_the_gcloud_account(site):
     assert "me@example.com" in page
 
 
+def test_no_context_note_when_contexts_are_listed(site):
+    # Ember 07, carry-over 3: the profile pins a kubeconfig and the contexts
+    # render — so the page must not also say "no kubeconfig pinned" (the 6792b1f
+    # set the note before the `if` and never cleared it on success).
+    page = site.get("/p/prod/env").text
+    assert "no kubeconfig pinned" not in page
+
+
 def test_docs_are_the_whole_paragraph_not_a_fragment(site):
     # Ember 06, item 6: the doc a key shows is the whole wrapped paragraph, not
     # the last line of it. The real example's CLUSTER doc is two wrapped lines.

@@ -225,8 +225,10 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         values = _envfile.get_all(raw) if raw else {k: "" for k, _ in _envfile.KNOWN_KNOBS}
 
         contexts: list[str] = []
-        ctx_note = "no kubeconfig pinned on the profile"
-        if profile.kubeconfig:
+        ctx_note = ""
+        if not profile.kubeconfig:
+            ctx_note = "no kubeconfig pinned on the profile"
+        else:
             try:
                 contexts = kubectl(env=profile.target().env).list_contexts()
             except ToolError:

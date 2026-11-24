@@ -139,6 +139,23 @@ def test_saving_a_valid_file_passes_validate(tmp_path):
     assert not p.read_text().splitlines()[-1].endswith("# x")
 
 
+def test_appending_a_new_key_adds_no_double_blank(tmp_path):
+    """Ember 07, carry-over 2: appending a new key to a file that ends in a
+    newline must not land it under a spurious blank. The exact input/output:
+    `PROJECT=acme\\n` + append REGION -> `PROJECT=acme\\nREGION=us\\n`. (The
+    6792b1f `_render` dropped the split's trailing blank *before* the append,
+    so the new line fell after it.)"""
+    p = tmp_path / "gojira.env"
+    p.write_text("PROJECT=acme\n")
+    save_env_file(p, {"PROJECT": "acme", "REGION": "us"})
+    assert p.read_text() == "PROJECT=acme\nREGION=us\n"
+    # and a mid-file blank is a real line the operator put there: kept
+    p2 = tmp_path / "b.env"
+    p2.write_text("PROJECT=acme\nREGION=us\n\nCLUSTER=x\n")
+    save_env_file(p2, {"CLUSTER": "x", "GOJIRA_CI_RUNNER": "spark"})
+    assert p2.read_text() == "PROJECT=acme\nREGION=us\n\nCLUSTER=x\nGOJIRA_CI_RUNNER=spark\n"
+
+
 def test_clearing_a_knob_writes_an_empty_assignment(tmp_path):
     """Ember 06, defect 2: a key the file carries and the operator cleared
     becomes `KEY=` (env.sh reads it as unset); a key absent from the file and
@@ -251,9 +268,10 @@ def test_example_docs_are_the_whole_paragraph():
                                "gojira-sandbox; for an existing cluster set its name "
                                "and GOJIRA_PREPARE_PROJECT=1 below.")
     # APP_ID carries the shared paragraph; PEM has no block directly above it
-    # (APP_ID sits right above), so it gets none — the doc is what is directly above
+    # (APP_ID sits right above), so it inherits APP_ID's doc — the words that
+    # document the pair
     assert docs["GOJIRA_GITHUB_APP_ID"] == "Your GitHub App: numeric id + downloaded key."
-    assert docs["GOJIRA_GITHUB_APP_PEM"] == ""
+    assert docs["GOJIRA_GITHUB_APP_PEM"] == "Your GitHub App: numeric id + downloaded key."
     # TERRAFORM: its wrapped paragraph, in reading order
     assert docs["GOJIRA_TERRAFORM"] == ("1 = make install creates the cluster with terraform/ "
                                         "(first time, about ten minutes). Leave empty if you "
@@ -270,9 +288,40 @@ def test_example_docs_against_the_real_example():
     c = docs.get("CLUSTER", "")
     assert "The GKE cluster Gojira runs in" in c
     assert "existing cluster set its name" in c
+    # Ember 07, carry-over 1: the second of a documented pair reaches the shared
+    # paragraph (the 6792b1f top-grouping never matched a blockless key)
+    assert docs["GOJIRA_GITHUB_APP_PEM"] == docs["GOJIRA_GITHUB_APP_ID"]
+    assert docs["GOJIRA_ALLOWED_EMAILS"] == docs["GOJIRA_ALLOWED_DOMAIN"]
+    assert docs["GOJIRA_OBSERVE_CLUSTERS"] == docs["GOJIRA_OBSERVE_JOB_IMAGE"]
+    # and the first of each is not empty (they carry the paragraph)
+    assert docs["GOJIRA_GITHUB_APP_ID"]
+    # a key under a banner only, above a banner-only peer, stays empty
+    assert docs["REGION"] == ""
     # every knob the page edits gets a doc from the example (or "")
     for key, _ in KNOWN_KNOBS:
         assert key in docs
+
+
+def test_a_pair_shares_its_paragraph_in_the_docs():
+    """Ember 07, carry-over 1, synthetic: the example documents a pair in one
+    paragraph; the second key, which has no comment directly above it, inherits
+    the first's doc. The `---` banner under which the pair sits is a divider,
+    not a doc, so it must not leak to them either."""
+    example = "\n".join([
+        "# --- required -----------------------------------------------------------------",
+        "PROJECT=acme",
+        "REGION=us-central1",
+        "# Your GitHub App: numeric id plus the downloaded private key.",
+        "GOJIRA_GITHUB_APP_ID=1234567",
+        "GOJIRA_GITHUB_APP_PEM=./github-app.pem",
+    ])
+    docs = example_docs(example)
+    assert docs["GOJIRA_GITHUB_APP_ID"] == "Your GitHub App: numeric id plus the downloaded private key."
+    # the shared paragraph must reach the second key (fails at 6792b1f)
+    assert docs["GOJIRA_GITHUB_APP_PEM"] == "Your GitHub App: numeric id plus the downloaded private key."
+    # the banner does not leak: REGION (and PROJECT) sit under it only
+    assert docs["REGION"] == ""
+    assert docs["PROJECT"] == ""
 
 
 def test_known_knobs_are_a_known_set():

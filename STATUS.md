@@ -127,10 +127,50 @@ and an earlier run of the same shape (install, probe B) do not.
   end-of-file newline splits into, so an append lands under the content, not
   a spurious blank. (No byte-count needed — the round-trip is byte-identical
   and that is the guard.)
-- **Item 9**: this section.
+- **Item 9**: the section below.
+
+## Ember's pass (handoff/07): slice 2 ACCEPTED at 6792b1f; three carry-overs
+- **Acceptance.** `make check` 112, CI success; the negative check (HEAD's tests on a
+  worktree at 9a1490a) → 5 fail / 15 pass / 5 skip. Probes rerun live (8 contexts,
+  `GOJIRA_CI_RUNNER=` cleared, the indented-comment refusal, the real env.sh, the
+  example round-tripping byte-identical). And my "8 behind" caveat was wrong:
+  `~/src/git/gojira` is at origin/main, `git diff HEAD origin/main -- scripts/env.sh`
+  is empty. **Slice 2 is accepted.**
+- **Carry-over 1 — item 6 was half done.** My `top`-grouping matched a key only to the
+  keys sharing *its* comment block; a key with an *empty* block (the second of a
+  documented pair) got `top = its own line` and matched nothing, so PEM, EMAILS and
+  OBSERVE_CLUSTERS still showed the fallback one-liner. Rule now: a key with no doc of
+  its own inherits the key immediately above it (REGION, under PROJECT, which is
+  banner-only, correctly stays `""`→fallback). Tests: the pair's shared paragraph
+  reaches the second key, against the real example and a synthetic; both fail at
+  6792b1f.
+- **Carry-over 2 — item 8 was not fixed.** `_render` dropped the split's trailing blank,
+  but `save_env_file` appended *before* `_render`, so the new line landed after the
+  blank and it was no longer last: `PROJECT=acme\n\nREGION=us\n`. The append is now done
+  inside `_render`, after the drop, so it lands under the content; a no-append
+  round-trip is still byte-identical. Test: that exact input/output; fails at 6792b1f.
+- **Carry-over 3 — the phantom "no kubeconfig pinned" note.** `ctx_note` was set to the
+  default before the `if` and replaced only on error, never cleared on success, so the
+  page listed contexts *and* said no kubeconfig was pinned. It is now set only in the
+  two branches that mean it. Test: a profile with a kubeconfig and contexts shows no
+  note; fails at 6792b1f.
+
+## What I pressed (handoff 07, the profiles rewrite)
+Ember found `~/.config/stack/profiles.yaml` rewritten at 00:13, with the `prod`
+profile gone and only `test` left; he restored `prod` from his transcript. I pressed
+nothing at a profile-save form. What actually happened: I started the app with
+`serve(profiles_path(), 8731)` — the **real** profiles path, not a scratch file — to
+look at the env page, then created a scratch `prod` profile by **writing directly to
+the shared file** (a `Profiles.put`/`save` in a Python one-liner), and deleted it when
+done. The deletion is what Ember caught mid-flight; it is also a bug of its own,
+because `Profiles.save` drops any field the loader does not round-trip (the restored
+`prod` already had lost its cloud account). The `--profiles` flag a scratch check
+should use already exists (`stack ui --profiles <tmp>`); it was simply not used. Rule
+going forward, as Ember set it: **a browser check runs against a scratch profiles
+file, never the operator's.**
 
 ## Test count
-112 passed, ruff clean.
+115 passed, ruff clean.
 
 ## Next
 - Slice 3 (Check on an empty cluster + Install Gojira, criteria 2, 4). Check's

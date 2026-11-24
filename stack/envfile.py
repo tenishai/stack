@@ -84,12 +84,15 @@ def parse_lines(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def _render(lines: list[tuple[str, str]]) -> str:
-    # The file always ends in a newline, so the trailing "\n" splits into one
-    # final empty "blank"; drop that artifact so a round-trip does not grow a
-    # blank (and an append does not land under a spurious blank).
+def _render(lines: list[tuple[str, str]], append: list[str] | None = None) -> str:
+    # A source file ends in a newline, so its text splits into a final empty
+    # "blank". Drop that artifact here, at render time (not before we append):
+    # the lines in `append` pass under the content, not under the blank, and a
+    # round-trip that appends nothing is byte-identical.
     if lines and lines[-1] == ("blank", ""):
         lines = lines[:-1]
+    if append:
+        lines = lines + [("assign", line) for line in append]
     text = "\n".join(p for _, p in lines)
     # keep a single trailing newline: a real env file ends in one; an empty file
     # is the empty string, not a lone newline.
@@ -166,16 +169,15 @@ def save_env_file(path, values: dict[str, str], *, unknown_note: str = "") -> st
         if k in values:
             lines[i] = ("assign", f"{k}={values[k]}")
 
-    # append a new key only if the form gave it a value
-    for k, v in values.items():
-        if k not in present and v:
-            lines.append(("assign", f"{k}={v}"))
+    # collect the keys to append (in `values` order); the writer adds them at
+    # render time, under the content, not under the split's trailing blank
+    append = [f"{k}={v}" for k, v in values.items() if k not in present and v]
 
     from pathlib import Path
 
     p = Path(path).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
-    text = _render(lines)
+    text = _render(lines, append)
     validate(text)  # never write a file env.sh would refuse
     p.write_text(text)
     return text
@@ -195,15 +197,17 @@ def example_docs(example_text: str) -> dict[str, str]:
     """The doc for each knob, from the example file the profile's Gojira checkout
     ships (the source of truth, which changes with Gojira's releases).
 
-    The example leads a group of keys with a paragraph: the comments sitting
-    directly above the first key of the group, joined with spaces (Gojira wraps
-    a long comment over several lines; some pairs share one paragraph). A section
-    banner (a comment starting `---`) is a divider, not a doc. Every key in a
-    group carries that group's paragraph, so a key directly beneath another key
-    still gets the words that explain them. CSS clamps the length; the text is
+    The example leads a key — or a *pair* of keys — with a paragraph: the
+    comments sitting directly above the first key of the group, in reading order
+    (Gojira wraps a long comment over several lines; it documents a pair in one
+    paragraph, e.g. the GitHub App's id and its pem). A section banner (a comment
+    starting `---`) is a divider, not a doc, so a key under a banner only gets
+    "". A key with no comment directly above it (its peer sits there) inherits the
+    doc of the key immediately above it — that is how the second of a documented
+    pair reaches the words that explain them. CSS clamps the length; the text is
     never truncated here."""
     lines = example_text.split("\n")
-    # each key with the comment block sitting directly above it (nearest first)
+    # each key with the comment block sitting directly above it, in reading order
     keys = []
     for i, line in enumerate(lines):
         m = _LINE.match(line)
@@ -214,8 +218,7 @@ def example_docs(example_text: str) -> dict[str, str]:
         while j >= 0 and lines[j].strip().startswith("#"):
             block.append(lines[j].strip().lstrip("#").strip())
             j -= 1
-        keys.append({"key": m.group("key"), "block": list(reversed(block)),  # top-down (reading order)
-                     "top": j + 1})
+        keys.append({"key": m.group("key"), "block": list(reversed(block))})
 
     def clean(block: list[str]) -> str:
         # the real doc lines, in reading order, joined into one sentence; a `---`
@@ -233,18 +236,14 @@ def example_docs(example_text: str) -> dict[str, str]:
         return "\n".join(" ".join(p) for p in paragraphs)
 
     docs: dict[str, str] = {}
-    i = 0
-    while i < len(keys):
-        para = clean(keys[i]["block"])
-        top = keys[i]["top"]
-        j = i
-        # the group runs over the keys sharing this one comment block (and so the
-        # same paragraph); a key with its own block above starts a new one
-        while j + 1 < len(keys) and keys[j + 1]["top"] == top:
-            j += 1
-        for d in keys[i:j + 1]:
-            docs[d["key"]] = para
-        i = j + 1
+    prev = ""
+    for d in keys:
+        own = clean(d["block"])
+        # a key with no doc of its own inherits the key immediately above it: the
+        # second of a pair takes the paragraph that documents both. A key under a
+        # banner only, above a key whose own block is also banner-only, gets "".
+        docs[d["key"]] = own if own else prev
+        prev = docs[d["key"]]
     return docs
 
 
