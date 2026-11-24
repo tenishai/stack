@@ -251,11 +251,11 @@ class FakeGcloud:
 
     def __init__(self, account: str = "me@example.com",
                  projects: list[dict[str, str]] | None = None):
-        self.account = account
+        self._account = account
         self._projects = projects or []
 
     def account(self) -> str:
-        return self.account
+        return self._account
 
     def projects(self) -> list[dict[str, str]]:
         return list(self._projects)

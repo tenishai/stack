@@ -47,22 +47,23 @@ TEMPLATES.env.filters["image_parts"] = image_parts
 
 def _example_path(profile) -> Path | None:
     """The gojira.env.example the profile's Gojira checkout ships, when one is
-    findable: under its repos dir, the gojira repo the stack references (else
-    the first clone), then the Gojira the operator checks out by hand."""
-    stack = None
-    try:
-        stack = Stack.load(Path(profile.stack_file).expanduser())
-    except Exception:
-        stack = None
+    under its repos dir: the gojira repo the stack references (else the first
+    clone under the repos dir). The repos dir is the source; a checkout the
+    operator has elsewhere is not guessed at."""
+    base = Path(profile.repos).expanduser() if profile.repos else None
     guesses = []
-    base = Path(profile.repos).expanduser() if profile.repos else Path(profile.stack_file).expanduser().parent
-    if stack is not None:
-        for app in stack.apps:
-            if "gojira" in app.repo.split("/")[-1] or app.repo.split("/")[-1] == "gojira":
-                guesses.append(base / app.repo.split("/")[-1] / "gojira.env.example")
-                break
-    guesses += [base / "gojira" / "gojira.env.example",
-                Path.home() / "src" / "git" / "gojira" / "gojira.env.example"]
+    if base is not None:
+        stack = None
+        try:
+            stack = Stack.load(Path(profile.stack_file).expanduser())
+        except Exception:
+            stack = None
+        if stack is not None:
+            for app in stack.apps:
+                if "gojira" in app.repo.split("/")[-1]:
+                    guesses.append(base / app.repo.split("/")[-1] / "gojira.env.example")
+                    break
+        guesses.append(base / "gojira" / "gojira.env.example")
     for g in guesses:
         if g.exists():
             return g
@@ -227,16 +228,20 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         ctx_note = "no kubeconfig pinned on the profile"
         if profile.kubeconfig:
             try:
-                contexts = kubectl(profile.target().env).list_contexts()
-            except Exception:
+                contexts = kubectl(env=profile.target().env).list_contexts()
+            except ToolError:
                 ctx_note = f"could not read the contexts in {profile.kubeconfig}"
         projects: list[dict] = []
+        account = ""
         try:
-            projects = gcloud(profile.target().env).projects()
-        except Exception:  # a dead gcloud is a note, not a page error
-            projects = []
+            gc = gcloud(env=profile.target().env)
+            projects = gc.projects()
+            account = gc.account()
+        except ToolError:  # a dead gcloud is a note, not a page error
+            projects, account = [], ""
         return page("env.html", request, profile=profile, env_path=env_path, env_error=env_error,
-                    values=values, docs=docs, contexts=contexts, ctx_note=ctx_note, projects=projects)
+                    values=values, docs=docs, contexts=contexts, ctx_note=ctx_note, projects=projects,
+                    account=account)
 
     @app.post("/p/{name}/env")
     async def env_save(name: str, request: Request):
@@ -247,10 +252,10 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return notice(request, 422, "this profile has no env file to save to; set one in Profile settings first",
                           level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
         form = await request.form()
-        # only the keys the operator filled are passed to the writer; the rest
-        # of the file is rewritten in place with its own values, untouched
-        values = {k: (form.get(k) or "").strip() for k in _envfile.KNOWN_KEYS
-                  if (form.get(k) or "").strip()}
+        # every knob the form shows is passed through, empty included: a key the
+        # file carries and the operator cleared becomes `KEY=` (env.sh reads it as
+        # unset); a key not in the file and empty is simply not appended.
+        values = {k: (form.get(k) or "").strip() for k in _envfile.KNOWN_KEYS}
         try:
             _envfile.save_env_file(Path(profile.env_file).expanduser(), values)
         except ToolError as exc:

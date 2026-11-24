@@ -46,9 +46,11 @@ def site(tmp_path):
     kubectl.contexts = ["gke_vidios-qa_us-central1_gojira-sandbox", "gke_other_cluster", "minikube"]
 
     runner = Runner()
+    # keyword-only factories: a positional `kubectl(env)` in the route fails here
+    # instead of surfacing as an empty pick on a real machine (Ember 06, item 1)
     app = make_app(tmp_path / "p.yaml", runner,
                    perform=lambda *a, **k: _noop(), preflight=lambda s, t: [],
-                   kubectl=lambda env: kubectl, gcloud=lambda env: gcloud)
+                   kubectl=lambda *, env: kubectl, gcloud=lambda *, env: gcloud)
     client = TestClient(app)
     client.gcloud, client.kubectl, client.env = gcloud, kubectl, env
     # register the profile pointing at our env file
@@ -133,12 +135,43 @@ def test_env_page_without_kubeconfig_says_so(site, tmp_path):
 
 
 def test_docs_prefer_the_example_over_the_pages_own(site, tmp_path):
-    # put an example under the profile's repos so the page finds it
+    # a marker string the page's own one-liner does NOT contain, so the test
+    # cannot pass by falling back to the fallback (Ember 06, item 5)
+    marker = "zqxwv-example-doc"
     repos = tmp_path / "repos" / "gojira"
     repos.mkdir(parents=True, exist_ok=True)
-    (repos / "gojira.env.example").write_text(EXAMPLE.read_text()) if EXAMPLE.exists() else None
+    (repos / "gojira.env.example").write_text(f"# {marker}\nPROJECT=acme\n")
     site.post("/profiles", data={"name": "doc", "stack_file": str(tmp_path / "d.yaml"),
                                  "repos": str(tmp_path / "repos"), "env_file": str(site.env)})
     page = site.get("/p/doc/env").text
-    # the example's doc for PROJECT ("GCP project the install belongs to") wins
-    assert "GCP project" in page
+    # the example's doc (the marker) wins over the page's own "GCP project"
+    assert marker in page
+
+
+def test_clearing_a_knob_clears_it_in_the_file(site):
+    # Ember 06, defect 2: an emptied field clears the knob, not a silent no-op.
+    # The fixture's env has no GOJIRA_CI_RUNNER, so add one, then clear it.
+    env = site.env
+    env.write_text(env.read_text() + "GOJIRA_CI_RUNNER=spark\n")
+    site.post("/p/prod/env", data={"PROJECT": "vidios-qa", "GOJIRA_CI_RUNNER": ""})
+    text = env.read_text()
+    assert "GOJIRA_CI_RUNNER=" in text      # cleared, not left as =spark
+    assert "GOJIRA_CI_RUNNER=spark" not in text
+
+
+def test_env_page_shows_the_gcloud_account(site):
+    # the pick lists what this machine sees; say which identity the projects came from
+    page = site.get("/p/prod/env").text
+    assert "me@example.com" in page
+
+
+def test_docs_are_the_whole_paragraph_not_a_fragment(site):
+    # Ember 06, item 6: the doc a key shows is the whole wrapped paragraph, not
+    # the last line of it. The real example's CLUSTER doc is two wrapped lines.
+    if not EXAMPLE.exists():
+        pytest.skip("gojira checkout not present")
+    from stack.envfile import example_docs
+    docs = example_docs(EXAMPLE.read_text())
+    c = docs.get("CLUSTER", "")
+    assert "The GKE cluster Gojira runs in" in c       # the first (lead) line
+    assert "existing cluster set its name" in c        # and the wrapped second line

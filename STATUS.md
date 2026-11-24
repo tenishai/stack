@@ -19,7 +19,7 @@ Handoff 01 (ui-increment-2), slice 2 of 6: the env file as a form (criterion 1).
     from the kubeconfig's contexts. Saves through the lossless writer.
   - `stack/templates/env.html`, `_profile_form.html` (env-file label),
     `profile.html` (env-file link in the strip), `base.html` (knob grid CSS).
-  - `tests/test_envfile.py` (7), `tests/test_env_page.py` (7), `tests/fakes.py`
+  - `tests/test_envfile.py` (13), `tests/test_env_page.py` (9), `tests/fakes.py`
     (`FakeGcloud`, `FakeKubectl.list_contexts`).
 
 ## The mark + saw_running rule (final, note 03)
@@ -86,8 +86,51 @@ and an earlier run of the same shape (install, probe B) do not.
 - **Jinja note.** The page's pick-list is a `<datalist>` per knob (PROJECT, CLUSTER),
   the native way to offer picks without changing the input's value semantics.
 
+## Ember's pass (handoff/06): slice 2 reworked, pushed
+- **Process**: the two commits were local-only; now pushed to `origin/main`.
+- **Item 1 (CLUSTER pick never lists on a real machine)**: the route called
+  `kubectl(profile.target().env)` positionally, and `KubectlCLI.__init__
+  (context="", env=None)` took the dict as `context`; the broad `except
+  Exception` swallowed the resulting TypeError into an empty pick. Both
+  clients are now called **keyword-only** (`kubectl(env=…)`, `gcloud(env=…)`),
+  the `except`s narrowed to `ToolError`, and the test factories are
+  `lambda *, env: …` so a positional call fails instead of quietly emptying
+  the pick. `make check` + a browser check show the picks on a real machine.
+- **Defect 2 (clear-a-knob)**: `save_env_file` now writes every knob the form
+  passes through — an emptied field the file carries becomes `KEY=` (env.sh
+  reads it unset), a key not in the file and empty is not appended. Test:
+  set, clear, `KEY=`.
+- **Defect 3 (indented comment)**: the writer treated any `#…` line as a
+  comment; env.sh skips only `''|'#'*` (a column-0 `#`), so an indented one
+  is a refusal at provision. `validate` now mirrors that exactly (verified
+  against the real env.sh: `KEY=1 # why` and an indented `#` refuse; a bare
+  `K=1#x` does not — a `#` on a non-space char is still the value). I was
+  wrong that a "mid-line `#" is valid: that clause is the env.sh error itself.
+- **Item 4 (transcribed copy)**: the load test now sources the **real**
+  `scripts/env.sh` (skips on CI where the checkout is absent). My local
+  `~/src/git/gojira` is 8 commits behind origin; the rule tested is the one
+  at HEAD.
+- **Item 5 (`_example_path` guess)**: it no longer guesses
+  `~/src/git/gojira`; it resolves under the profile's repos dir only (the
+  stack's gojira repo, else the first clone), and an absent dir is a note,
+  not a crash. The prefer-test uses a marker the fallback can't contain.
+- **Item 6 (truncated docs)**: `example_docs` returns the **whole** comment
+  block directly above a key, in reading order (a wrapped comment is its
+  sentence, not its last line); a `---` banner is a divider, not a doc;
+  multi-line docs render via `white-space:pre-line` (CSS clamps, no
+  truncation in Python). The page shows the full CLUSTER/GOJIRA_TERRAFORM/
+  GOJIRA_OBSERVE_JOB_IMAGE paragraphs.
+- **Item 7 (account shadowing)**: `FakeGcloud` stored its account in
+  `self.account`, shadowing the `account()` method; the `self._account` fix
+  is in. The env page now shows the gcloud account next to the projects list.
+- **Item 8 (trailing-blank bloat)**: `_render` drops the artifact blank an
+  end-of-file newline splits into, so an append lands under the content, not
+  a spurious blank. (No byte-count needed — the round-trip is byte-identical
+  and that is the guard.)
+- **Item 9**: this section.
+
 ## Test count
-104 passed, ruff clean.
+112 passed, ruff clean.
 
 ## Next
 - Slice 3 (Check on an empty cluster + Install Gojira, criteria 2, 4). Check's

@@ -47,9 +47,11 @@ KNOWN_KNOBS: list[tuple[str, str]] = [
 ]
 KNOWN_KEYS = {k for k, _ in KNOWN_KNOBS}
 
-# env.sh's refusal, mirrored: whitespace then `#` after a value (the `KEY=1 # why`
-# shape). A bare `#` with no leading space is not a comment to env.sh.
-_TRAILING_COMMENT = re.compile(r"[ \t]#")
+# env.sh's skip is `case ''|'#'*`: only an empty line or a `#` in column 0 is
+# skipped. Anything else with a `#` somewhere (whitespace-then-`#`, or a
+# mid-line `#`) falls through and is refused. Mirror that exactly: a
+# column-0 `#` is a comment; whitespace-then-`#` (not a column-0 `#`) is the
+# shape env.sh refuses (a KEY=value carrying it, or a line that is one).
 _LINE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
 
 
@@ -73,7 +75,7 @@ def parse_lines(text: str) -> list[tuple[str, str]]:
     for line in text.split("\n"):
         if line == "":
             out.append(("blank", ""))
-        elif line.lstrip().startswith("#"):
+        elif line.startswith("#"):  # column 0 only: env.sh skips `''|'#'*`
             out.append(("comment", line))
         elif _LINE.match(line):
             out.append(("assign", line))
@@ -83,15 +85,15 @@ def parse_lines(text: str) -> list[tuple[str, str]]:
 
 
 def _render(lines: list[tuple[str, str]]) -> str:
-    # A trailing newline in the text yields a final "blank" line; drop it so we
-    # do not grow a blank every round-trip, but keep an explicit one if there is
-    # content after it.
+    # The file always ends in a newline, so the trailing "\n" splits into one
+    # final empty "blank"; drop that artifact so a round-trip does not grow a
+    # blank (and an append does not land under a spurious blank).
+    if lines and lines[-1] == ("blank", ""):
+        lines = lines[:-1]
     text = "\n".join(p for _, p in lines)
-    # preserve a single trailing newline when the source had one (a real env
-    # file ends in a newline; the empty final "blank" is the split artifact)
-    if text.endswith("\n"):
-        text = text[:-1]
-    return text + "\n"
+    # keep a single trailing newline: a real env file ends in one; an empty file
+    # is the empty string, not a lone newline.
+    return text + "\n" if text else ""
 
 
 def get(text: str, key: str) -> str:
@@ -113,30 +115,40 @@ def get_all(text: str, keys: list[tuple[str, str]] | None = None) -> dict[str, s
 
 
 def validate(text: str) -> None:
-    """Refuse the file the way `scripts/env.sh` does: a comment that trails a
-    value on the same line. Raises ToolError naming the key."""
+    """Refuse the file the way `scripts/env.sh` does. env.sh skips only an empty
+    line or a `#` in column 0; any other line carrying a `#` (a `KEY=1   # why`,
+    or an indented `   # note` that is not a column-0 comment) is refused. Raises
+    ToolError naming the key it can, or the line when it cannot."""
     for line in text.split("\n"):
-        if not line or line.lstrip().startswith("#"):
+        if not line or line.startswith("#"):
             continue
         m = _LINE.match(line)
-        if m and _TRAILING_COMMENT.search(m.group("value")):
-            raise ToolError(
-                f"env file: '{m.group('key')}' has a comment after its value; put the comment on its own line"
-            )
+        if m:
+            # env.sh refuses a value that carries whitespace-then-`#` (the `KEY=1 # why`
+            # shape; a `#` directly on a non-space char is still the value, not a comment)
+            if re.search(r"[\t ]#", m.group("value")):
+                raise ToolError(
+                    f"env file: '{m.group('key')}' has a comment after its value; put the comment on its own line"
+                )
+            continue
+        # not a KEY=value at all, yet it carries a `#` (e.g. an indented `   # note`):
+        # a comment env.sh will refuse
+        if "#" in line:
+            raise ToolError(f"env file: a comment is not on its own line: '{line.strip()}'")
 
 
 def save_env_file(path, values: dict[str, str], *, unknown_note: str = "") -> str:
     """Write the file back, losslessly.
 
-    Every key the file already carries is rewritten in place with its new value
-    from `values` (its old value when `values` does not name it — unknown keys
-    survive a save untouched). The keys' order, and every comment and blank line,
-    is kept exactly. A key that is in `values` but not yet in the file is appended
-    at the end. A key whose value is a comment-free assignment never gains a
-    trailing comment of its own (env.sh would refuse one).
+    Every key the file already carries is rewritten in place with its value from
+    `values` — even an empty one: `KEY=` is a knob the operator cleared, and env.sh
+    reads it as unset. A key in `values` that is not yet in the file is appended
+    only if it has a value (never a wall of empty knobs). The keys' order, and
+    every comment and blank line, is kept exactly.
 
-    Raises ToolError (without touching the file) when any value would carry a
-    trailing comment. Returns the written text."""
+    Raises ToolError (without touching the file) when the file, or any value,
+    carries the comment shape env.sh would refuse. Returns the written text."""
+    validate(read_env_file(path))      # refuse before writing: the file itself
     validate("\n".join(f"{k}={v}" for k, v in values.items() if v))
 
     lines = parse_lines(read_env_file(path))
@@ -149,15 +161,15 @@ def save_env_file(path, values: dict[str, str], *, unknown_note: str = "") -> st
                 assigns.append((i, m.group("key")))
     present = {k for _, k in assigns}
 
-    # rewrite each existing assign with its new value (or leave it untouched)
+    # rewrite each existing assign with its form value (even "" = cleared)
     for i, k in assigns:
         if k in values:
             lines[i] = ("assign", f"{k}={values[k]}")
 
-    # append any key in `values` that is not yet in the file
-    for k in values:
-        if k not in present:
-            lines.append(("assign", f"{k}={values[k]}"))
+    # append a new key only if the form gave it a value
+    for k, v in values.items():
+        if k not in present and v:
+            lines.append(("assign", f"{k}={v}"))
 
     from pathlib import Path
 
@@ -180,30 +192,59 @@ def example_to_values(example_text: str, known: list[tuple[str, str]] | None = N
 
 
 def example_docs(example_text: str) -> dict[str, str]:
-    """The one-line doc for each knob, from the example file the profile's
-    Gojira checkout ships (the source of truth, which changes with Gojira's
-    releases). A key with no comment line above it gets ""."""
-    docs: dict[str, str] = {}
+    """The doc for each knob, from the example file the profile's Gojira checkout
+    ships (the source of truth, which changes with Gojira's releases).
+
+    The example leads a group of keys with a paragraph: the comments sitting
+    directly above the first key of the group, joined with spaces (Gojira wraps
+    a long comment over several lines; some pairs share one paragraph). A section
+    banner (a comment starting `---`) is a divider, not a doc. Every key in a
+    group carries that group's paragraph, so a key directly beneath another key
+    still gets the words that explain them. CSS clamps the length; the text is
+    never truncated here."""
     lines = example_text.split("\n")
+    # each key with the comment block sitting directly above it (nearest first)
+    keys = []
     for i, line in enumerate(lines):
         m = _LINE.match(line)
         if not m:
             continue
-        key = m.group("key")
-        doc = ""
-        # the last comment line of the block sitting directly above the key.
-        # Gojira wraps a long comment over several lines; its final line is the
-        # one the key's value follows, so it reads as the key's own one-liner.
-        # An all-dashes section banner carries no doc, so the key gets none.
         block = []
         j = i - 1
         while j >= 0 and lines[j].strip().startswith("#"):
             block.append(lines[j].strip().lstrip("#").strip())
             j -= 1
-        if block:  # block[0] is the line closest to the key
-            if not set(block[0]) <= {"-", " "}:
-                doc = block[0]
-        docs[key] = doc
+        keys.append({"key": m.group("key"), "block": list(reversed(block)),  # top-down (reading order)
+                     "top": j + 1})
+
+    def clean(block: list[str]) -> str:
+        # the real doc lines, in reading order, joined into one sentence; a `---`
+        # divider or a blank opens a new paragraph (a line break in the output).
+        paragraphs: list[list[str]] = [[]]
+        for t in block:
+            if t.startswith("---") or t == "":
+                paragraphs.append([])
+            else:
+                paragraphs[-1].append(t)
+        while paragraphs and not paragraphs[0]:
+            paragraphs.pop(0)
+        while paragraphs and not paragraphs[-1]:
+            paragraphs.pop()
+        return "\n".join(" ".join(p) for p in paragraphs)
+
+    docs: dict[str, str] = {}
+    i = 0
+    while i < len(keys):
+        para = clean(keys[i]["block"])
+        top = keys[i]["top"]
+        j = i
+        # the group runs over the keys sharing this one comment block (and so the
+        # same paragraph); a key with its own block above starts a new one
+        while j + 1 < len(keys) and keys[j + 1]["top"] == top:
+            j += 1
+        for d in keys[i:j + 1]:
+            docs[d["key"]] = para
+        i = j + 1
     return docs
 
 
