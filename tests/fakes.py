@@ -25,6 +25,9 @@ class FakeGojira:
         # the /healthz shape Gojira serves: {"ok": true, "version": ...}
         return {"ok": True, "version": self.version}
 
+    def close(self):
+        self.calls.append("close")
+
     def clusters(self):
         return list(self._clusters)
 
@@ -61,7 +64,7 @@ class FakeGojira:
 class FakeKubectl:
     def __init__(self, ready: dict[str, tuple[int, int]] | None = None, log_code: str = "ABC123",
                  images: dict[str, str] | None = None):
-        self.namespaces: set[str] = set()
+        self.ns_set: set[str] = set()
         self.secrets: dict[tuple[str, str], dict[str, str]] = {}
         self.configmaps: dict[tuple[str, str], dict[str, str]] = {}
         self.applied: list[str] = []
@@ -81,11 +84,11 @@ class FakeKubectl:
         return list(getattr(self, "contexts", ["fake-context"]))
 
     def namespace_exists(self, ns):
-        return ns in self.namespaces
+        return ns in self.ns_set
 
     def namespaces(self):
         # the fake cluster is always reachable, so a reachable list, never None
-        return sorted(self.namespaces)
+        return sorted(self.ns_set)
 
     def secret_exists(self, ns, name):
         return (ns, name) in self.secrets

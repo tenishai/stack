@@ -77,7 +77,7 @@ def _k8s(ns_exists: bool = True, ready=(1, 1), *, version: str | None = "v1.3.1"
 
     k = FakeKubectl(ready={NS: ready})
     if ns_exists:
-        k.namespaces.add(NS)
+        k.ns_set.add(NS)
         if version is not None:
             k.configmaps[(NS, "gojira-install")] = {"GOJIRA_VERSION": version}
     if dead:
@@ -246,6 +246,26 @@ def test_install_gojira_reports_the_go_jira_version_when_ready(tmp_path):
     assert "v1.3.1" in page
 
 
+def test_install_gojira_reads_the_version_from_healthz_when_the_configmap_is_absent(tmp_path, monkeypatch):
+    """Ember 10 item 3: the version's primary source is `/healthz` (the
+    port-forwarded Gojira), not the ConfigMap. Here the ConfigMap is absent and the
+    Gojira's `health()` carries the version — so the run's version must come from
+    the client `open_gojira` returns, not the ConfigMap. At 811e21f the helper was
+    never given the client, so this fails: the version would be the "unknown"
+    fallback, not the one `health()` serves."""
+    import stack.runs as runs_mod
+    from tests.fakes import FakeGojira
+
+    fake_go = FakeGojira(version="v9.9.9")   # /healthz carries this
+    monkeypatch.setattr(runs_mod, "open_gojira", lambda *a, **k: (_k8s(ns_exists=True, ready=(1, 1)), fake_go))
+    # no ConfigMap (version=None), pods ready; the only version source is health()
+    site = _site(tmp_path, install=_fake_install(tmp_path), kubectl=_k8s(ns_exists=True, ready=(1, 1), version=None))
+    site.post("/p/prod/install-gojira", follow_redirects=False)
+    _wait(site.runner.runs[1])
+    page = site.get("/runs/1").text
+    assert "v9.9.9" in page   # from health(), not the (absent) ConfigMap
+
+
 # --- unknown: a dead kubectl is neither empty nor installed (Ember 09 item 3) ---
 
 
@@ -271,7 +291,7 @@ def test_namespace_only_says_so_and_offers_install(tmp_path):
     site = _site(tmp_path, install=_fake_install(tmp_path),
                  kubectl=_k8s(ns_exists=True, ready=(0, 0), version=None), ns_exists=True)
     page = site.get("/p/prod").text
-    assert "namespace gojira exists, nothing answers" in page
+    assert "namespace gojira exists, pods not all ready" in page
     assert "Install Gojira" in page
     # no version claimed (the namespace is not a running Gojira)
     assert "is on this cluster" not in page

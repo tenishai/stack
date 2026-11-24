@@ -175,8 +175,10 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                         gojira_version = _gojira_version(kc, ns)
                     else:
                         gojira_state = "namespace-only"
-                        gojira_note = (f"namespace {ns} exists, nothing answers"
-                                       + (f" ({ready}/{total} pods ready)" if total else " (no pods)"))
+                        # a half-failed install, or a rollout where one pod still answers:
+                        # "pods not all ready" is true in both; "nothing answers" is not the latter
+                        gojira_note = (f"namespace {ns} exists, pods not all ready"
+                                       + (f" ({ready}/{total})" if total else " (no pods)"))
                 else:
                     gojira_state = "empty"
             except ToolError:
@@ -382,17 +384,15 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                                         "scripts/install.sh; set it in Profile settings",
                           level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
         stack, _ = stack_or_error(profile)
+        target = profile.target()
         ns = stack.gojira.namespace if stack else "gojira"
-        target_env = profile.target().env
+        target_env = target.env
         target_env["GOJIRA_ENV"] = str(env_path)
 
         def work(run: _runs.Run):
             run.add("head", "install.gojira")
             run.add("info", f"running {repo / 'scripts' / 'install.sh'} under the env file {env_path}")
-            try:
-                out, rc = _run_install(repo, target_env, run)
-            except ToolError:
-                raise
+            rc = _run_install(repo, target_env, run)
             if rc != 0:
                 # a non-zero exit is a stop: raise so the run is marked failed the way
                 # every other run is (the script's own last line is already a red stop)
@@ -408,7 +408,21 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                 run.ok = False
                 return
             run.add("ok", f"{ready}/{total} Gojira pods ready")
-            version = _gojira_version(kc, ns)   # kubectl-only here: gojira-install/GOJIRA_VERSION
+            # the version: /healthz (the port-forwarded Gojira) primarily, the
+            # gojira-install ConfigMap as fallback. open_gojira gives the client;
+            # a ToolError there (namespace gone between the check and now) is not
+            # a failed install — the pods are ready; fall back to the ConfigMap.
+            gojira = None
+            if stack is not None:
+                try:
+                    _, gojira = _runs.open_gojira(stack, target, say=run.add)
+                except ToolError:
+                    gojira = None
+            try:
+                version = _gojira_version(kc, ns, gojira)
+            finally:
+                if gojira is not None:
+                    gojira.close()
             if version and version != "running, version unknown":
                 run.add("ok", f"Gojira {version}")
             else:
@@ -438,26 +452,23 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             pass
         return "running, version unknown"
 
-    def _run_install(repo: Path, env: dict[str, str], run: _runs.Run) -> tuple[str, int]:
+    def _run_install(repo: Path, env: dict[str, str], run: _runs.Run) -> int:
         """Run the checkout's scripts/install.sh as a subprocess, streaming its
         stdout line by line onto the run. The values travel in the environment
         (install.sh sources gojira.env from GOJIRA_ENV), never on the command
-        line, so no value appears on a run line. Returns (all output, exit
-        code); a non-zero exit is a stop the script's own last line carries."""
+        line, so no value appears on a run line. Returns the exit code; a non-zero
+        exit is a stop the script's own last line carries."""
         import subprocess
         script = str(repo / "scripts" / "install.sh")
         proc = subprocess.Popen(["bash", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1, env=tool_env(env))
-        chunks = []
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.rstrip()
             if not line:
                 continue
-            chunks.append(line)
             run.add("info", line)
-        rc = proc.wait()
-        return "\n".join(chunks), rc
+        return proc.wait()
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_page(run_id: int, request: Request):

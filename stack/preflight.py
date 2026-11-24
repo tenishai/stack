@@ -89,16 +89,20 @@ def check_github(stack: Stack, github: GitHubClient) -> list[Check]:
     return out
 
 
-def check_cluster(stack: Stack, kubectl: KubectlClient, gojira: GojiraClient) -> list[Check]:
+def check_cluster(stack: Stack, kubectl: KubectlClient, gojira: GojiraClient,
+                  not_installed: str = "not connected; Install does it") -> list[Check]:
     """Each app on the Gojira: its row, its pods, and what it runs against
     what the file pins. A differing pin is a warn, not a fail: Upgrade is the
-    answer, and the row says so."""
+    answer, and the row says so. An app with no row says `not_installed` — the
+    default words (a Gojira is there, this app is not on it: Install *the app*).
+    The empty-cluster branch of `preflight` overrides it to "Install Gojira
+    first", because there Gojira itself is what is missing."""
     out = []
     rows = {r.name: r for r in gojira.apps()}
     for app in stack.apps:
         row = rows.get(app.name)
         if row is None:
-            out.append(Check(f"{app.name}: Gojira", "warn", "not installed yet — Install Gojira first"))
+            out.append(Check(f"{app.name}: Gojira", "warn", not_installed))
             continue
         if row.status == "active":
             out.append(Check(f"{app.name}: Gojira", "ok", "active"))
@@ -166,7 +170,9 @@ def preflight(stack: Stack, target: Target, which: Callable[[str], str | None] =
         listed = None
     if listed is not None and stack.gojira.namespace not in listed:
         out.append(Check("Gojira", "warn", "no Gojira on this cluster yet"))
-        out += check_cluster(stack, kubectl, _NoGojira())
+        # empty cluster: what is missing is Gojira itself, so the app rows say so
+        out += check_cluster(stack, kubectl, _NoGojira(),
+                             not_installed="not installed yet — Install Gojira first")
         return out
     try:
         kubectl, gojira = open_gojira(stack, target, say=lambda _: None)

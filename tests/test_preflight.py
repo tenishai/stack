@@ -174,16 +174,48 @@ apps:
     kobo = _by(checks, "kobo: Gojira")
     assert kobo.status == "warn" and "not installed yet" in kobo.detail and "Install Gojira first" in kobo.detail
 
+
+def test_an_unconnected_app_on_an_installed_go_jira_keeps_the_old_words(tmp_path):
+    """Ember 10 item 1: `check_cluster` says `not connected; Install does it` for
+    an app with no Gojira row, whatever cluster it runs against — that is the
+    common case (a Gojira is there, this app is not on it: Install *the app*, not
+    Gojira). The `Install Gojira first` words belong only to the empty-cluster
+    branch of `preflight`, which supplies them itself. A prod-the-day-someone-adds
+    a-sixth-app cluster: namespace present, a Gojira with no apps, an app not on it."""
+    from tests.fakes import FakeGojira, FakeKubectl
+    stack, target = _stack(tmp_path, """
+apps:
+  - {name: kobo, repo: o/kobo, image: r/kobo:v1, deploy_repo: o/kobo-deploy}
+""")
+    kc = FakeKubectl()
+    kc.ns_set.add(stack.gojira.namespace)   # the namespace is there (Gojira is installed)
+    gojira = FakeGojira(apps=[])           # ...but this app is not on it
+    checks = check_cluster(stack, kc, gojira)
+    kobo = _by(checks, "kobo: Gojira")
+    assert kobo.status == "warn"
+    assert "not connected" in kobo.detail
+    assert "Install Gojira" not in kobo.detail   # the wrong action in the common case
+
+
+def test_an_empty_fake_cluster_warns_not_refuses(monkeypatch, tmp_path):
+    """Ember 10 item 2: `preflight` on an empty cluster, through the real code path
+    with `KubectlCLI` patched to a `FakeKubectl` that has no gojira namespace.
+    This calls `KubectlCLI.namespaces()` — the method the fake's old
+    `self.namespaces` set shadowed (`TypeError: 'set' object is not callable` at
+    811e21f), so it is the test that proves the rename, not the shell-kubectl
+    second test. The row is a warn, not a refusal."""
+    import stack.preflight as pf
+
+    empty = FakeKubectl()   # no namespaces at all
+    monkeypatch.setattr(pf, "KubectlCLI", lambda *a, **k: empty)
+    # a real gh not logged in is fine; this test is about the cluster row
     stack, target = _stack(tmp_path, """
 apps:
   - {name: kobo, repo: o/kobo, image: r/kobo:v1, deploy_repo: o/kobo-deploy}
 """)
     checks = preflight(stack, target)
-    by = {c.what: c for c in checks}
-    # the Gojira row is a plain warn, not the refusal
-    assert by["Gojira"].status == "warn" and "no Gojira on this cluster yet" in by["Gojira"].detail
-    # every other row still ran
-    assert by["kubectl"].status == "ok"
-    # the app row says not installed yet — Install Gojira first (the new wording)
+    gojira = _by(checks, "Gojira")
+    assert gojira.status == "warn" and "no Gojira on this cluster yet" in gojira.detail
+    # the app row ran and carries the empty-cluster words
     kobo = _by(checks, "kobo: Gojira")
-    assert kobo.status == "warn" and "not installed yet" in kobo.detail and "Install Gojira first" in kobo.detail
+    assert kobo.status == "warn" and "Install Gojira first" in kobo.detail

@@ -45,7 +45,9 @@ Check on an empty cluster + Install Gojira. Ember 09's three re-provings applied
        install. Now read where Gojira actually reports it: `/healthz` ("version")
        primarily, the `gojira-install`/`GOJIRA_VERSION` ConfigMap (what `bootstrap.sh`
        writes, `bootstrap.sh:148-150`) as fallback, "running, version unknown" as last
-       resort.
+       resort. (The `/healthz` read was *claimed* in this round but not wired — the
+       code passed no client; Ember 10 item 3 caught that, and the wiring is in the
+       10 block below. As of the 10 round the claim is true.)
     2. *The installed state kept the button* — it now says "Gojira v1.3.1 is on this
        cluster" and the button relabels **Run install.sh again**: *make install* from a
        newer checkout is how Gojira is upgraded, so the surface for it stays.
@@ -221,7 +223,37 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   reports `(ready, total)`.
 
 ## Test count
-128 passed, ruff clean.
+131 passed, ruff clean.
+
+## Ember's pass (handoff/10): the 09 round, re-proven (811e21f)
+- **Verdict.** The two criteria that failed at f6fc666 now hold, checked the way 09
+  asked (real `preflight()` on a reachable fake with no namespace; real prod page
+  read-only showing `Gojira v1.3.1` + `Run install.sh again`). Three fixes remain.
+- **Item 1 — the app-row wording.** `check_cluster` had `not installed yet — Install
+  Gojira first` for *every* app without a row, whatever cluster — wrong in the common
+  case (a Gojira is there, this app is not on it: Install *the app*). Now it keeps
+  the old words (`not connected; Install does it`); the empty-cluster branch of
+  `preflight` supplies the `Install Gojira first` wording via a new `not_installed`
+  parameter on `check_cluster`. Test: `check_cluster(stack, kc_with_ns,
+  FakeGojira(apps=[]))` → `not connected`, not `Install Gojira`.
+- **Item 2 — `FakeKubectl.namespaces()` was uncalledable.** The instance attribute
+  `self.namespaces: set` shadowed the `def namespaces()` method (`TypeError: 'set'
+  object is not callable`); nothing called it, so nothing caught it (same class as
+  `FakeGcloud.account` in note 06). Renamed the set to `ns_set`. Test: a `preflight`
+  with `KubectlCLI` patched to a namespace-less `FakeKubectl` → the warn row.
+- **Item 3 — STATUS said `/healthz`; the code never read it.** The 09 round claimed
+  `/healthz` was primary but passed no client (so it never was). Now wired in the
+  *install run*: after `pods_ready`, it `open_gojira` (the port-forwarded client) and
+  passes it to `_gojira_version`, so the run's version is `/healthz`-primary with the
+  `gojira-install` ConfigMap as fallback. The *page* still reads the ConfigMap only —
+  `GOJIRA_VERSION` in that map is the very value `/healthz` serves, and the page
+  avoids a port-forward per load. Test: ConfigMap absent, the fake's `health()`
+  carries the version → the run reports it. New `FakeGojira.close()`.
+- **Nits fixed.** The duplicated second half of the empty-cluster preflight test
+  deleted; the no-op `except ToolError: raise` and the unused `out` from
+  `_run_install` removed (it now returns just the exit code); the namespace-only note
+  says `pods not all ready (1/2)` (true in both a half-failed install and a rollout
+  where one pod still answers), not `nothing answers`.
 
 ## Ember's pass (handoff/09): slice 3 — the version, the button, the states
 - **Verdict.** The direction (a *button that runs the install*, not a page that
