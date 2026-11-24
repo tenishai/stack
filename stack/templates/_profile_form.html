@@ -12,7 +12,13 @@
     <div><label>Repo clones (--repos)</label><input type="text" name="repos" value="{{ p.repos if p else '' }}" placeholder="~/src/git/stack"></div>
     <div><label>cbl (for a stack that bootstraps cabal)</label><input type="text" name="cbl" value="{{ p.cbl if p else '' }}" placeholder="~/src/git/stack/cabal/.venv/bin/cbl"></div>
   </div>
-  <label>Gojira env file (the install's gojira.env; used by the install flow later)</label>
-  <input type="text" name="env_file" value="{{ p.env_file if p else '' }}" placeholder="~/gojira-agents-prod.env">
+  <div class="row">
+    <label>Gojira env file (the install's gojira.env; used by the install flow)</label>
+    <input type="text" name="env_file" value="{{ p.env_file if p else '' }}" placeholder="~/gojira-agents-prod.env">
+  </div>
+  <div class="row">
+    <label>Gojira checkout (Install Gojira runs its scripts/install.sh; empty = the repos dir's gojira clone)</label>
+    <input type="text" name="gojira_repo" value="{{ p.gojira_repo if p else '' }}" placeholder="~/src/git/gojira">
+  </div>
   <button type="submit">{{ 'Save' if p else 'Add' }}</button>
 </form>

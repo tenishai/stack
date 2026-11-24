@@ -1,6 +1,7 @@
 # STATUS
 
-Handoff 01 (ui-increment-2), slice 2 of 6: the env file as a form (criterion 1).
+Handoff 01 (ui-increment-2): slices 1–3 done. Slice 3 (criteria 2, 4):
+Check on an empty cluster + Install Gojira.
 
 ## Done
 - Makefile `check` (pytest + ruff). `make install` now `uv sync --locked`.
@@ -21,6 +22,21 @@ Handoff 01 (ui-increment-2), slice 2 of 6: the env file as a form (criterion 1).
     `profile.html` (env-file link in the strip), `base.html` (knob grid CSS).
   - `tests/test_envfile.py` (13), `tests/test_env_page.py` (9), `tests/fakes.py`
     (`FakeGcloud`, `FakeKubectl.list_contexts`).
+- Slice 3 — Check on an empty cluster + Install Gojira (criteria 2, 4):
+  - `stack/profiles.py`: `Profile.gojira_repo` (optional; the Gojira checkout
+    that owns `scripts/install.sh`).
+  - `stack/clients.py`: `KubectlCLI.configmap_value(ns, name, key)` (+ protocol;
+    `FakeKubectl` gets it too) — the version straight out of the ConfigMap.
+  - `stack/ui.py`: `POST /p/{name}/install-gojira` — runs `scripts/install.sh`
+    from the profile's `gojira_repo` with `GOJIRA_ENV` pinned to the profile's env
+    file, as a run; refuses when the env file or the checkout's `install.sh` is
+    missing, and says so (the env file's values never reach the run's lines);
+    on success it checks the pods are ready and reads the version. The profile
+    page states an empty cluster ("no Gojira on this cluster yet"), offers the
+    button then, and shows the running version when a Gojira is there.
+  - `stack/templates/_profile_form.html` (checkout field), `profile.html`
+    (the Gojira row: empty-state + button / installed version).
+  - `tests/test_install_gojira.py` (10), `tests/fakes.py` (`configmap_value`).
 
 ## The mark + saw_running rule (final, note 03)
 
@@ -162,19 +178,33 @@ nothing at a profile-save form. What actually happened: I started the app with
 `serve(profiles_path(), 8731)` — the **real** profiles path, not a scratch file — to
 look at the env page, then created a scratch `prod` profile by **writing directly to
 the shared file** (a `Profiles.put`/`save` in a Python one-liner), and deleted it when
-done. The deletion is what Ember caught mid-flight; it is also a bug of its own,
-because `Profiles.save` drops any field the loader does not round-trip (the restored
-`prod` already had lost its cloud account). The `--profiles` flag a scratch check
-should use already exists (`stack ui --profiles <tmp>`); it was simply not used. Rule
-going forward, as Ember set it: **a browser check runs against a scratch profiles
-file, never the operator's.**
+done. The deletion is what Ember caught mid-flight. I had also claimed `Profiles.save`
+"drops any field the loader does not round-trip (the restored prod lost its cloud
+account)" — that was wrong (Ember 08): `Profile` declares `cloud_account`
+(profiles.py), the form posts it (ui.py), and the restored file carries it
+(`grep cloud_account ~/.config/stack/profiles.yaml` → 1). What I read at 00:13 was
+my own one-profile file, before the restore at 00:19; there is no field-drop bug.
+A claim without a reproduction is exactly what this file keeps out, so the sentence
+is gone. The `--profiles` flag a scratch check should use already exists
+(`stack ui --profiles <tmp>`); it was simply not used. Rule going forward, as Ember
+set it: **a browser check runs against a scratch profiles file, never the operator's.**
+
+## Slice 3 notes
+- **Honesty about the engine.** Install Gojira runs the checkout's own
+  `scripts/install.sh` (the proven path, `GOJIRA_ENV` pinned via `tool_env`), not the
+  stack-installer engine — the env file is the contract, and the values never reach
+  the run's lines (only the script's stdout does). The button's caption says so.
+  The stack engine (Install/Upgrade, the per-app rows) stays separate: an empty
+  cluster is stated on the page, not consumed by the engine's app rows.
+- **Done, as Ember set it.** The run is done when the script exits 0 *and* the
+  pods are ready; the version is read from the ConfigMap (criterion 4), which is
+  why `configmap_value` exists.
+- **`wait_rolled` reused** for the pod readiness after install.sh; `pods_ready`
+  reports `(ready, total)`.
 
 ## Test count
-115 passed, ruff clean.
+125 passed, ruff clean.
 
 ## Next
-- Slice 3 (Check on an empty cluster + Install Gojira, criteria 2, 4). Check's
-  cluster row says "no Gojira on this cluster yet"; the page offers *Install
-  Gojira*, which runs `scripts/install.sh` from the profile's Gojira checkout
-  (new profile path `gojira_repo`) with the env pinned, as a run.
-- Same rules: tests that fail at the parent commit, `make check` green, STATUS row.
+- Slice 4 (if any). Same rules: tests that fail at the parent commit, `make check`
+  green, STATUS row.

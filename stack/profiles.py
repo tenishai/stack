@@ -34,6 +34,7 @@ class Profile(BaseModel):
     repos: str = ""           # clones of the apps' upstream repos (--repos); empty = the stack file's dir
     cbl: str = ""             # the cabal CLI, for a stack that bootstraps cabal (--cbl)
     env_file: str = ""        # the install's gojira.env; recorded now, used by the install flow (#12 increment 2)
+    gojira_repo: str = ""     # the profile's Gojira checkout (Install Gojira runs its scripts/install.sh); empty = the repos dir's gojira clone
 
     @model_validator(mode="after")
     def _paths(self):

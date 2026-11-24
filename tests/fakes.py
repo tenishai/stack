@@ -90,6 +90,9 @@ class FakeKubectl:
     def configmap_exists(self, ns, name):
         return (ns, name) in self.configmaps
 
+    def configmap_value(self, ns, name, key):
+        return self.configmaps.get((ns, name), {}).get(key, "")
+
     def apply_configmap(self, ns, name, data):
         self.calls.append(f"configmap:{ns}/{name}")
         self.configmaps[(ns, name)] = dict(data)

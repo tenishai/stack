@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from stack import envfile as _envfile
 from stack import preflight as _preflight
 from stack import runs as _runs
-from stack.clients import CraneCLI, GcloudCLI, GhCLI, KubectlCLI, ToolError
+from stack.clients import CraneCLI, GcloudCLI, GhCLI, KubectlCLI, ToolError, tool_env
 from stack.model import Stack
 from stack.profiles import Profile, Profiles
 from stack.steps import ref_parts
@@ -127,11 +127,11 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     @app.post("/profiles")
     def save_profile(request: Request, name: str = Form(), stack_file: str = Form(),
                      kubeconfig: str = Form(""), cloud_account: str = Form(""), repos: str = Form(""),
-                     cbl: str = Form(""), env_file: str = Form("")):
+                     cbl: str = Form(""), env_file: str = Form(""), gojira_repo: str = Form("")):
         try:
             profile = Profile(name=name.strip(), stack_file=stack_file.strip(), kubeconfig=kubeconfig.strip(),
                               cloud_account=cloud_account.strip(), repos=repos.strip(), cbl=cbl.strip(),
-                              env_file=env_file.strip())
+                              env_file=env_file.strip(), gojira_repo=gojira_repo.strip())
         except ValueError as exc:
             return page("index.html", request, rows=index_rows(), error=str(exc).splitlines()[0], status_code=422)
         book = Profiles.load(profiles_path)
@@ -154,9 +154,24 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         stack, error = stack_or_error(profile)
         runs = [r for r in runner.runs.values() if r.profile == name]
         last_check = next((r for r in reversed(runs) if r.kind == "check"), None)
+        # Slice 3: is there a Gojira on this cluster yet? The Install Gojira button
+        # shows only when there is not. A dead kubectl is a note, not a page error,
+        # and an installed-looking page never offers to install again.
+        gojira_installed = False
+        gojira_note = ""
+        gojira_version = ""
+        if stack is not None:
+            try:
+                kc = kubectl(env=profile.target().env)
+                gojira_installed = kc.namespace_exists(stack.gojira.namespace)
+                if gojira_installed:
+                    gojira_version = _gojira_version(kc, stack.gojira.namespace)
+            except ToolError:
+                gojira_note = f"could not read the cluster in {profile.kubeconfig or 'the current context'}"
         return page("profile.html", request, profile=profile, stack=stack, error=error, env=environment(stack),
                     runs=list(reversed(runs)), last_check=last_check, check_level=level_of(last_check),
-                    busy=runner.active())
+                    busy=runner.active(), gojira_installed=gojira_installed, gojira_note=gojira_note,
+                    gojira_version=gojira_version)
 
     @app.post("/p/{name}/check")
     def check(name: str, request: Request):
@@ -323,6 +338,101 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return notice(request, 409, f"a run is already going: #{active.id} {active.kind} on {active.profile}",
                           title="One run at a time", level="warn", link=f"/runs/{active.id}", link_text="Watch it")
         return RedirectResponse(f"/runs/{run.id}", status_code=303)
+
+    @app.post("/p/{name}/install-gojira")
+    def install_gojira(name: str, request: Request):
+        """Slice 3 (criteria 2, 4): the Gojira underneath the stack. One press runs
+        the profile's Gojira checkout's `scripts/install.sh` as a subprocess under
+        the pinned env — `GOJIRA_ENV` points at the profile's env file, so install.sh
+        reads the values it sourced there; nothing is sourced into this process and
+        no env value ever appears on a run line. Done means the Gojira pod is ready
+        and `/healthz` answers with a version. Refused, with a sentence naming which,
+        when the profile has no env file or no Gojira checkout."""
+        profile = load_profile(name)
+        if profile is None:
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
+        env_path = Path(profile.env_file).expanduser() if profile.env_file else None
+        repo = Path(profile.gojira_repo).expanduser() if profile.gojira_repo else None
+        # Refused before anything runs: name the thing that is missing, and only it.
+        if env_path is None:
+            return notice(request, 422, "Install Gojira needs the profile's env file (Gojira env file) set first",
+                          level="warn", link=f"/p/{name}/env", link_text="Go to the env form")
+        if not env_path.exists():
+            return notice(request, 422, f"no such env file: {env_path}", level="warn",
+                          link=f"/p/{name}/env", link_text="Go to the env form")
+        # the checkout: gojira_repo if set, else the repos dir's gojira clone
+        if repo is None and profile.repos:
+            repo = Path(profile.repos).expanduser() / "gojira"
+        if repo is None or not (repo / "scripts" / "install.sh").exists():
+            return notice(request, 422, "Install Gojira needs the profile's Gojira checkout (gojira_repo) with a "
+                                        "scripts/install.sh; set it in Profile settings",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        stack, _ = stack_or_error(profile)
+        ns = stack.gojira.namespace if stack else "gojira"
+        target_env = profile.target().env
+        target_env["GOJIRA_ENV"] = str(env_path)
+
+        def work(run: _runs.Run):
+            run.add("head", "install.gojira")
+            run.add("info", f"running {repo / 'scripts' / 'install.sh'} under the env file {env_path}")
+            try:
+                out, rc = _run_install(repo, target_env, run)
+            except ToolError:
+                raise
+            if rc != 0:
+                # a non-zero exit is a stop: raise so the run is marked failed the way
+                # every other run is (the script's own last line is already a red stop)
+                raise ToolError(f"scripts/install.sh exited {rc}")
+            # done means the Gojira pod is ready and /healthz answers with a version
+            kc = kubectl(env=target_env)
+            try:
+                ready, total = kc.pods_ready(ns)
+            except ToolError:
+                ready, total = 0, 0
+            if not total or ready != total:
+                run.add("fail", f"stopped: {ready}/{total} Gojira pods ready")
+                run.ok = False
+                return
+            run.add("ok", f"{ready}/{total} Gojira pods ready")
+            version = _gojira_version(kc, ns)
+            if version:
+                run.add("ok", f"Gojira {version} (/healthz)")
+            else:
+                run.add("warn", "Gojira is up; could not read its version")
+
+        return _started(request, runner.start(name, "install.gojira", "Gojira (scripts/install.sh)", work))
+
+    def _gojira_version(kubectl, ns: str) -> str:
+        """The version /healthz answers with, read where Gojira keeps it (the
+        gojira-version ConfigMap). Empty when it is not there yet."""
+        try:
+            if not kubectl.configmap_exists(ns, "gojira-version"):
+                return ""
+            data = kubectl.configmap_value(ns, "gojira-version", "version")
+            return data or ""
+        except ToolError:
+            return ""
+
+    def _run_install(repo: Path, env: dict[str, str], run: _runs.Run) -> tuple[str, int]:
+        """Run the checkout's scripts/install.sh as a subprocess, streaming its
+        stdout line by line onto the run. The values travel in the environment
+        (install.sh sources gojira.env from GOJIRA_ENV), never on the command
+        line, so no value appears on a run line. Returns (all output, exit
+        code); a non-zero exit is a stop the script's own last line carries."""
+        import subprocess
+        script = str(repo / "scripts" / "install.sh")
+        proc = subprocess.Popen(["bash", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, env=tool_env(env))
+        chunks = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            chunks.append(line)
+            run.add("info", line)
+        rc = proc.wait()
+        return "\n".join(chunks), rc
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_page(run_id: int, request: Request):
