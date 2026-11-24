@@ -15,7 +15,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from stack.clients import GhCLI, GitHubClient, GojiraClient, KubectlCLI, KubectlClient, ToolError
+from stack.clients import (
+    AppRow,
+    GhCLI,
+    GitHubClient,
+    GojiraClient,
+    KubectlCLI,
+    KubectlClient,
+    ToolError,
+)
 from stack.model import Stack
 from stack.runs import Target, open_gojira
 from stack.steps import DIGEST, ref_parts
@@ -137,15 +145,42 @@ def _short(image: str) -> str:
     return head.split("/")[-1] + (f"@{digest[:19]}…" if digest else "")
 
 
-class _NoGojira:
+class _NoGojira(GojiraClient):
     """A Gojira client for a cluster with no Gojira: no apps, nothing to close.
-    `check_cluster` gives every app the "not installed yet" row against it."""
+    `check_cluster` gives every app the "not installed yet" row against it.
+    Subclasses the `GojiraClient` Protocol so it is a `GojiraClient` (mypy); the
+    mutating members raise — there is no Gojira to mutate."""
 
-    def apps(self):
+    def apps(self) -> list[AppRow]:
         return []
 
     def url(self):
         return ""
+
+    def clusters(self) -> list[dict]:
+        return []
+
+    def register_cluster(self, name: str, gcp_project: str, location: str, gke_cluster: str, ar_repo: str) -> None:
+        raise ToolError("no Gojira on this cluster")
+
+    def app(self, app_id: int) -> AppRow:
+        raise ToolError(f"no app {app_id}")
+
+    def connect(self, name: str, repo: str, workload_class: str, environment: str, namespace: str,
+                auto_merge: bool) -> AppRow:
+        raise ToolError("no Gojira on this cluster")
+
+    def provision(self, app_id: int) -> None:
+        raise ToolError("no Gojira on this cluster")
+
+    def sync(self, app_id: int) -> AppRow:
+        raise ToolError(f"no app {app_id}")
+
+    def api_token(self) -> str:
+        raise ToolError("no Gojira on this cluster")
+
+    def health(self) -> dict:
+        return {"ok": False}
 
     def close(self):
         pass

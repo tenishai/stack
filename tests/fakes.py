@@ -12,6 +12,7 @@ class FakeGojira:
         self._apps = {a.id: a for a in (apps or [])}
         self._clusters = clusters or []
         self.version = version
+        self.url = ""
         self.calls: list[str] = []
         # what a fresh connect comes back as, by app name (default awaiting_pr with a PR)
         self.connect_outcome: dict[str, tuple[str, str]] = {}

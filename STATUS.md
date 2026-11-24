@@ -1,11 +1,12 @@
 # STATUS
 
 Handoff 01 (ui-increment-2): slices 1–3 done. Slice 3 (criteria 2, 4):
-Check on an empty cluster + Install Gojira. Ember 09's three re-provings applied
-(phantom version, hidden button, the check wording + a fourth page state).
+Check on an empty cluster + Install Gojira. Ember 09, 10, 11 all applied —
+the 11 round re-proved the install/check fixes on a real cluster and found
+two live defects 5e4e998 still carried (both now fixed, plus mypy in the gate).
 
 ## Done
-- Makefile `check` (pytest + ruff). `make install` now `uv sync --locked`.
+- Makefile `check` (ruff → mypy → pytest; mypy added to the dev extra and the gate). `make install` now `uv sync --locked`.
 - Slice 1 — install's done is the rolled deployment:
   - `stack/steps.py`: `install_app` ends image apps in `wait_rolled(app, digest)`.
   - `tests/test_install_roll.py`, `tests/fakes.py`: probes, scripts, fakes.
@@ -223,7 +224,44 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   reports `(ready, total)`.
 
 ## Test count
-131 passed, ruff clean.
+134 passed, ruff clean, mypy clean (mypy is in the gate now).
+
+## Ember's pass (handoff/11): the 10 round, re-proven on a real cluster (5e4e998)
+- **Verdict.** The 09 items are all in — `install-gojira` ran the real `install.sh`
+  to `done` (exit 0, version read back, button relabelled), and `check` on the same
+  cluster is exactly the namespace-only state. Two live defects 5e4e998 still carried.
+- **Item 0 — `namespaces()` returned bytes** (`stack/clients.py`, `KubectlCLI.namespaces`):
+  `subprocess.run` without `text=True` → `r.stdout` is bytes, so
+  `stack.gojira.namespace not in listed` was *always* true — a running cluster
+  reported as empty (and `test_tools_are_asked_for_only_when_the_stack_needs_them`
+  only asserted the list *contained* the namespace, never its type). Now `text=True`.
+  Tests: a unit test that `namespaces()` returns `list[str]` (a kubectl on PATH
+  listing three), and a `preflight` on a cluster that lists the gojira namespace →
+  the warn row is absent, `open_gojira` is reached. (The `env=` kwarg is not optional:
+  the `KubectlClient` Protocol and `FakeKubectl` both require it, so the test passes
+  one; a no-arg `KubectlCLI()` was a reviewer-idealisation, not the real surface.)
+- **Item 1 — `say=run.add` was an unwired crash** (`stack/ui.py`, the
+  `install_gojira` `work`):
+  `open_gojira(..., say=run.add)` — `Run.add` wants two args; `say` is a
+  one-arg logger, so it crashed to a `TypeError` (not a `ToolError`) the moment
+  `open_gojira` fired. It never surfaced because test A pins *precedence*, not
+  *wiring* (it replaces `_gojira_version` wholesale and hands a ready `FakeGojira`,
+  so `open_gojira` is never called — a run with the real `open_gojira` and no
+  working `kubectl`/`gcloud` dies at `pods_ready` first, which is why the whole
+  test suite passed while the real thing failed). Now `say=run.say`. Test (new,
+  real-wiring): the install endpoint with the real `_gojira_version` and the real
+  `open_gojira` (classes patched, `KubectlCLI`→`FakeKubectl`, `HttpGojira`→
+  `FakeGojira`) → the run is `done`, not `failed`.
+- **Item 2 — the type gate.** Mypy added to the dev extra and to `make check`
+  (`ruff → mypy → pytest`); first run surfaced 37 pre-existing errors (a `say: object`,
+  a dict of `str` holding lists, a `Protocol` stub with a method the `Http` impl
+  lacks, an `Optional` profile dereferenced, an `UploadFile` `.strip()`, the
+  `logs_grep` ABC missing `since`, the `_NoGojira` stub not conforming to the
+  `GojiraClient` Protocol, the `envfile`/`model` narrowing, the test method-assigns).
+  All fixed → clean on `stack/` and `tests/`.
+- **Nits fixed.** `test_an_empty_fake_cluster_warns_not_refuses` now says it is the
+  rename proof (and notes it passes at 811e21f with HEAD's fakes.py — copy the test
+  but keep the parent's fakes.py to see the `TypeError`).
 
 ## Ember's pass (handoff/10): the 09 round, re-proven (811e21f)
 - **Verdict.** The two criteria that failed at f6fc666 now hold, checked the way 09
@@ -277,5 +315,10 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   version + re-run; unknown → no claim, no button.
 
 ## Next
+- **The acceptance is the last door** (criteria 1, 3, 5): the UI drives check +
+  install as one run, the profile page and the one-at-a-time rule, and the env-file
+  form. 11 is the re-proving round of the *install/check* fixes; the acceptance
+  itself is Ember's to run (same four checks as 07). Once it passes, handoff/01 is
+  closed.
 - Slice 4 (if any). Same rules: tests that fail at the parent commit, `make check`
   green, STATUS row.

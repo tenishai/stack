@@ -41,8 +41,10 @@ import os
 import re
 import secrets as _secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -98,7 +100,7 @@ class Options:
     token_ttl_days: int = 90
     yes: bool = False                    # upgrade: the data_mount backup gate was answered
     merge_pins: bool = False             # upgrade: merge the pin PR this run opens (the UI: the press is the review)
-    say: object = print
+    say: Callable[[str], None] = print
 
 
 @dataclass
@@ -106,7 +108,7 @@ class Report:
     done: list[str] = field(default_factory=list)
     waited_on: list[str] = field(default_factory=list)
 
-    def note(self, line: str, say) -> None:
+    def note(self, line: str, say: Callable[[str], None]) -> None:
         self.done.append(line)
         say(f"  {line}")
 
@@ -229,7 +231,7 @@ class Installer:
         base = upstream / "k8s" / "base"
         if not base.is_dir():
             raise ToolError(f"{app.name}: {app.repo} has no k8s/base at {base} (clone it under {self.o.repo_root})")
-        doc = {}
+        doc: dict[str, Any] = {}
         contract = upstream / "gojira.yaml"
         if contract.is_file():
             doc = yaml.safe_load(contract.read_text()) or {}
@@ -469,6 +471,7 @@ class Installer:
             self.report.note(f"{app.name}: built from source (no deploy_repo), upgrade skipped", self.o.say)
             return
         desired = self.ensure_mirrored(app)
+        assert self.c.crane is not None   # ensure_mirrored raised if crane was not configured
         text = self.c.github.read_file(app.deploy_repo, "gojira.yaml")
         m = IMAGE_LINE.search(text)
         if not m:

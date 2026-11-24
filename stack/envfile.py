@@ -208,7 +208,7 @@ def example_docs(example_text: str) -> dict[str, str]:
     never truncated here."""
     lines = example_text.split("\n")
     # each key with the comment block sitting directly above it, in reading order
-    keys = []
+    keys: list[dict[str, str | list[str]]] = []
     for i, line in enumerate(lines):
         m = _LINE.match(line)
         if not m:
@@ -238,12 +238,16 @@ def example_docs(example_text: str) -> dict[str, str]:
     docs: dict[str, str] = {}
     prev = ""
     for d in keys:
-        own = clean(d["block"])
+        key = d["key"]
+        blk: str | list[str] = d["block"]
+        if not isinstance(key, str) or not isinstance(blk, list):
+            continue
+        own = clean(blk)
         # a key with no doc of its own inherits the key immediately above it: the
         # second of a pair takes the paragraph that documents both. A key under a
         # banner only, above a key whose own block is also banner-only, gets "".
-        docs[d["key"]] = own if own else prev
-        prev = docs[d["key"]]
+        docs[key] = own if own else prev
+        prev = docs[key]
     return docs
 
 

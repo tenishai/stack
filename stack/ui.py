@@ -288,7 +288,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         # every knob the form shows is passed through, empty included: a key the
         # file carries and the operator cleared becomes `KEY=` (env.sh reads it as
         # unset); a key not in the file and empty is simply not appended.
-        values = {k: (form.get(k) or "").strip() for k in _envfile.KNOWN_KEYS}
+        values = {k: str(form.get(k) or "").strip() for k in _envfile.KNOWN_KEYS}
         try:
             _envfile.save_env_file(Path(profile.env_file).expanduser(), values)
         except ToolError as exc:
@@ -304,6 +304,8 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         app_ = next((a for a in stack.apps if a.name == app_name), None) if stack else None
         if app_ is None:
             return HTMLResponse(error or f"no app {app_name!r}", status_code=404)
+        if profile is None:
+            return HTMLResponse("no such profile", status_code=404)
         env = profile.target().env
         try:
             tags = _runs.available_tags(app_, crane(env))
@@ -350,7 +352,11 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
 
     def _started(request: Request, run: _runs.Run | None):
         if run is None:
+            # a run can finish in the gap between start() returning None and active();
+            # then there is no active run and nothing to point at
             active = runner.active()
+            if active is None:
+                return notice(request, 409, "a run just finished; press again", level="info", link="/", link_text="Profiles")
             return notice(request, 409, f"a run is already going: #{active.id} {active.kind} on {active.profile}",
                           title="One run at a time", level="warn", link=f"/runs/{active.id}", link_text="Watch it")
         return RedirectResponse(f"/runs/{run.id}", status_code=303)
@@ -415,7 +421,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             gojira = None
             if stack is not None:
                 try:
-                    _, gojira = _runs.open_gojira(stack, target, say=run.add)
+                    _, gojira = _runs.open_gojira(stack, target, say=run.say)
                 except ToolError:
                     gojira = None
             try:

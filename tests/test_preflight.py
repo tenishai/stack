@@ -203,7 +203,11 @@ def test_an_empty_fake_cluster_warns_not_refuses(monkeypatch, tmp_path):
     This calls `KubectlCLI.namespaces()` — the method the fake's old
     `self.namespaces` set shadowed (`TypeError: 'set' object is not callable` at
     811e21f), so it is the test that proves the rename, not the shell-kubectl
-    second test. The row is a warn, not a refusal."""
+    second test. The row is a warn, not a refusal.
+    Note on the negative proof: this passes at 811e21f *if HEAD's fakes.py ships
+    with it* (the rename is the fix, so the fake has to be the old one for the
+    proof to fail) — copy the test file but keep the parent's fakes.py to see it
+    fail with the TypeError."""
     import stack.preflight as pf
 
     empty = FakeKubectl()   # no namespaces at all
@@ -219,3 +223,55 @@ apps:
     # the app row ran and carries the empty-cluster words
     kobo = _by(checks, "kobo: Gojira")
     assert kobo.status == "warn" and "Install Gojira first" in kobo.detail
+
+
+def test_kubectlcli_namespaces_returns_str_not_bytes(tmp_path, monkeypatch):
+    """Ember 10 item 0 / 11 item 0: the real `KubectlCLI.namespaces()` must return
+    a `list[str]`, not a `list[bytes]` — `subprocess.run` without `text=True`
+    returns `r.stdout` as bytes, so every entry was `b"gojira"` and
+    `stack.gojira.namespace not in listed` was always true (a cluster that runs
+    Gojira reported as empty). A kubectl on PATH that lists three namespaces:
+    the gojira one is recognised as present (str, not bytes)."""
+    from stack.clients import KubectlCLI
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    # real `get ns --no-headers` lists one namespace per line
+    script = "#!/bin/bash\n"
+    script += 'if [[ "$*" == *"--no-headers"* ]]; then '
+    script += "printf 'default\\ngojira\\nkube-system\\n'\n"
+    script += "exit 0; fi\nexit 0\n"
+    (bindir / "kubectl").write_text(script)
+    (bindir / "kubectl").chmod((bindir / "kubectl").stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.path.dirname(sys.executable)}")
+    k = KubectlCLI(env={})
+    ns = k.namespaces()
+    assert ns is not None
+    assert all(isinstance(n, str) for n in ns)   # the bytes bug
+    assert ns == ["default", "gojira", "kube-system"]
+
+
+def test_preflight_reaches_open_gojira_when_the_cluster_lists_go_jira(tmp_path, monkeypatch):
+    """Ember 10 item 0 / 11 item 0: with `text=True`, a cluster that lists the
+    gojira namespace is NOT the empty case, so `preflight` reaches `open_gojira`
+    (the Gojira row is whatever `open_gojira` says, not the warn). Here the
+    listing has gojira, so the warn row must be absent; `open_gojira` is patched
+    to a known-good Gojira so the row is the ok row with its version."""
+    import stack.preflight as pf
+
+    kc = FakeKubectl(ready={"gojira": (1, 1)})
+    kc.ns_set.add("gojira")                       # the cluster lists gojira
+    monkeypatch.setattr(pf, "KubectlCLI", lambda *a, **k: kc)
+    monkeypatch.setattr(pf, "open_gojira", lambda *a, **k: (kc, FakeGojira(version="v1.3.1")))
+    stack, target = _stack(tmp_path, """
+apps:
+  - {name: kobo, repo: o/kobo, image: r/kobo:v1, deploy_repo: o/kobo-deploy}
+""")
+    checks = preflight(stack, target)
+    gojira = _by(checks, "Gojira")
+    # reached open_gojira: an ok row naming the context (NOT the empty-case warn)
+    assert gojira.status == "ok" and "context" in gojira.detail
+    assert "no Gojira on this cluster yet" not in gojira.detail
+    # the app row ran (it is not the empty-cluster "Install Gojira first" warn)
+    kobo = _by(checks, "kobo: Gojira")
+    assert "Install Gojira first" not in kobo.detail

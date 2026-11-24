@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -38,7 +38,6 @@ class Source(BaseModel):
 
     kind: Literal["file", "generate", "gojira-token", "template", "cabal-token", "literal"]
     arg: str = ""
-
     @classmethod
     def parse(cls, text: str) -> Source:
         m = SOURCE.match(text)
@@ -49,7 +48,8 @@ class Source(BaseModel):
             )
         if text == "gojira-token":
             return cls(kind="gojira-token")
-        kind, arg = m.group(1), m.group(2)
+        kind = cast("Literal['file', 'generate', 'template', 'cabal-token', 'literal']", m.group(1))
+        arg = m.group(2)
         if kind == "generate" and not re.fullmatch(r"\d+(:[a-z0-9-]+)?", arg):
             raise ValueError(f"generate: takes a byte count, optionally :<name> to share the value, got {arg!r}")
         if kind == "cabal-token" and ":" not in arg:

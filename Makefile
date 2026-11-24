@@ -6,8 +6,9 @@ install:
 	uv sync --locked --extra dev --extra ui
 
 check:
-	$(PYTHON) -m pytest -q
 	$(PYTHON) -m ruff check stack tests
+	$(PYTHON) -m mypy stack tests
+	$(PYTHON) -m pytest -q
 
 test:
 	$(PYTHON) -m pytest -q
