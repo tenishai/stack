@@ -33,14 +33,26 @@ and an earlier run of the same shape (install, probe B) do not.
   failure tuple (the pin's contract check, finding #20); the merge's run
   going in-flight then failing is the *same* tuple — `saw_running` is the
   discriminator. `wait_rolled` gained the flag (restoring the old
-  `saw_running` fast-fail); probe E (`tests/test_upgrade.py`) covers it.
-  Probe E fails on the mark-only commit, passes now.
+  `saw_running` fast-fail); probe E covers it. Fails on the mark-only
+  commit, passes now.
 - Old code left an implicit `saw_running` (it caught failure on
   in-progress→complete); the new code makes it explicit.
 
+## Ember's pass (handoff/04): slice 1 ACCEPTED at edd4e21
+- Ember ran `make check` (87, green), CI green, and a negative check of the
+  probe against bdab038 (fails, old behaviour) plus a second `_upgrade`
+  probe (stops in 0.06 s). Slice 1 accepted.
+- **One finish, folded into slice 2**: probe E called `inst.wait_rolled(...)`
+  directly, so a later move or re-mark of the call inside `upgrade_app` would
+  keep it green while the regression came back. It now goes through
+  `_upgrade` (the real path: `upgrade_app → settle_setup_pr → wait_rolled`),
+  with Ember's timing assertion (stop well inside a 3 s window). Verified:
+  passes at edd4e21, fails at bdab038.
+
 ## Test count
-87 passed, ruff clean (was 83 before notes 02/03; +4 tests: probe A, B, E,
-and the `_upgrade` helper's `rollout_seconds` param).
+87 passed, ruff clean.
 
 ## Next
-- Slice 2 (the env file as a form) — does not depend on slice 1.
+- Slice 2 (the env file as a form) — starts now (note 04). Nothing in it
+  depends on slice 1. Same rules: tests that fail at the parent commit,
+  `make check` green, STATUS row.

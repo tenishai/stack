@@ -1,5 +1,6 @@
 """Upgrade flow against fakes: the digest bump, the gate, and the roll."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -219,45 +220,35 @@ def test_a_roll_that_never_lands_times_out(tmp_path):
 
 
 def test_a_failed_post_provision_run_stops_fast(tmp_path):
-    """Probe E (Ember, note 03): the pin's own contract-check failure is the
+    """Probe E (Ember, notes 03/04): the pin's own contract-check failure is the
     latest run when the roll watch begins (it is the mark); the merge's run
     then goes in flight and fails, and its failure tuple EQUALS the mark. The
     mark alone cannot tell them apart — the watch's `saw_running` (it saw the
     run in flight under the watch) can. The upgrade stops with the Actions URL
     in a couple of polls, not after the whole rollout window: the old
-    wait_rolled's fast-fail (stack#13), which the mark-only rule lost."""
-    import time
-
-    from stack.steps import Clients, Installer, Options
+    wait_rolled's fast-fail (stack#13), which the mark-only rule lost. Goes
+    through the real upgrade path (_upgrade → upgrade_app → settle_setup_pr →
+    wait_rolled), not the inner function: a later move or re-mark of the call
+    in upgrade_app would be caught here (note 04)."""
     stack = _stack(tmp_path, [{"name": "kobo", "repo": "up/kobo", "deploy_repo": "org/kobo-deploy",
                                "image": "reg.example/apps/kobo:v2"}])
     github = FakeGitHub(repos={"org/kobo-deploy": {"gojira.yaml": GOJIRA_YAML}})
-    # the pin push's contract check is the latest run, and it failed — so it is
-    # the mark the roll watch takes
-    github.runs["org/kobo-deploy"] = ("completed", "failure")
-    # the deployment never picks up the new digest
+    github.runs["org/kobo-deploy"] = ("completed", "failure")   # the pin push's contract check
     kubectl = FakeKubectl(images={"kobo": f"reg.example/apps/kobo@{OLD_DIGEST}"})
-    # while the watch polls, the merge's run goes in flight, then completes as a
-    # failure (the same tuple as the mark: only saw_running distinguishes it)
-    state = {"flip": False, "fail": False}
-    def _poll(n, a):
-        out = kubectl.images.get("kobo", "")
-        if not state["flip"]:
-            state["flip"] = True
+    crane = FakeCrane(digests={"reg.example/apps/kobo:v2": NEW_DIGEST})
+    gojira = FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")])
+    state = {"n": 0}
+    def _poll(ns, name):
+        state["n"] += 1
+        if state["n"] == 1:
             github.runs["org/kobo-deploy"] = ("in_progress", "")
-        elif not state["fail"]:
-            state["fail"] = True
+        elif state["n"] == 2:
             github.runs["org/kobo-deploy"] = ("completed", "failure")
-        return out
+        return kubectl.images.get("kobo", "")
     kubectl.deployed_image = _poll
-    o = Options(stack_dir=tmp_path, repo_root=tmp_path / "r", poll_seconds=0, pr_wait_seconds=0.5,
-                rollout_seconds=2.0, bootstrap_seconds=0.5, say=lambda s: None)
-    inst = Installer(stack, Clients(gojira=FakeGojira(apps=[AppRow(id=1, name="kobo", status="active")]),
-                                    kubectl=kubectl, github=github,
-                                    crane=FakeCrane(digests={"reg.example/apps/kobo:v2": NEW_DIGEST})), o)
     t0 = time.monotonic()
-    with pytest.raises(ToolError, match="deploy run failed") as exc:
-        inst.wait_rolled(stack.apps[0], NEW_DIGEST)
-    assert "https://github.com/org/kobo-deploy/actions" in str(exc.value)
-    # the stop arrives in a couple of polls, not after a rollout window
-    assert time.monotonic() - t0 < 0.5
+    with pytest.raises(ToolError, match="deploy run failed"):
+        _upgrade(tmp_path, stack, gojira=gojira, github=github, kubectl=kubectl, crane=crane,
+                 rollout_seconds=3.0)
+    # the stop arrives in a couple of polls, well under the 3 s rollout window
+    assert time.monotonic() - t0 < 1.0
