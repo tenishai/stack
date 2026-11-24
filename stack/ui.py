@@ -17,9 +17,10 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from stack import envfile as _envfile
 from stack import preflight as _preflight
 from stack import runs as _runs
-from stack.clients import CraneCLI, GhCLI, ToolError
+from stack.clients import CraneCLI, GcloudCLI, GhCLI, KubectlCLI, ToolError
 from stack.model import Stack
 from stack.profiles import Profile, Profiles
 from stack.steps import ref_parts
@@ -44,6 +45,30 @@ TEMPLATES.env.filters["short_image"] = short_image
 TEMPLATES.env.filters["image_parts"] = image_parts
 
 
+def _example_path(profile) -> Path | None:
+    """The gojira.env.example the profile's Gojira checkout ships, when one is
+    findable: under its repos dir, the gojira repo the stack references (else
+    the first clone), then the Gojira the operator checks out by hand."""
+    stack = None
+    try:
+        stack = Stack.load(Path(profile.stack_file).expanduser())
+    except Exception:
+        stack = None
+    guesses = []
+    base = Path(profile.repos).expanduser() if profile.repos else Path(profile.stack_file).expanduser().parent
+    if stack is not None:
+        for app in stack.apps:
+            if "gojira" in app.repo.split("/")[-1] or app.repo.split("/")[-1] == "gojira":
+                guesses.append(base / app.repo.split("/")[-1] / "gojira.env.example")
+                break
+    guesses += [base / "gojira" / "gojira.env.example",
+                Path.home() / "src" / "git" / "gojira" / "gojira.env.example"]
+    for g in guesses:
+        if g.exists():
+            return g
+    return None
+
+
 def environment(stack: Stack | None) -> str:
     """The environment the stack's apps deploy to, when they agree on one;
     the page wears it (prod in rose) so a press is never made on the wrong one."""
@@ -62,7 +87,8 @@ def level_of(run) -> str:
 
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
              perform: Callable = _runs.perform, preflight: Callable = _preflight.preflight,
-             crane: Callable = CraneCLI, github: Callable = GhCLI) -> FastAPI:
+             crane: Callable = CraneCLI, github: Callable = GhCLI,
+             kubectl: Callable = KubectlCLI, gcloud: Callable = GcloudCLI) -> FastAPI:
     app = FastAPI(title="stack")
     runner = runner or _runs.Runner()
 
@@ -171,6 +197,65 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             run.add("ok", f"done: {len(report.done)} steps")
 
         return _started(request, runner.start(name, "install", ", ".join(apps) or "every app", work))
+
+    @app.get("/p/{name}/env", response_class=HTMLResponse)
+    def env_page(name: str, request: Request):
+        """The install's gojira.env, as a form. Values come from the file, docs
+        from the profile's gojira.env.example, and the picks (PROJECT, CLUSTER)
+        list what this machine can see — gcloud's projects and the kubeconfig's
+        contexts — so the operator can tell a name from the project it holds."""
+        profile = load_profile(name)
+        if profile is None:
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
+        env_path = Path(profile.env_file).expanduser() if profile.env_file else None
+        env_error = ""
+        raw = ""
+        if env_path is None:
+            env_error = "this profile has no env file yet — set one in Profile settings (Gojira env file)"
+        elif not env_path.exists():
+            env_error = f"no such file: {env_path}"
+        else:
+            raw = env_path.read_text()
+
+        # docs: the example's one-liner where it has one, else the page's own
+        example = _example_path(profile)
+        example_docs = _envfile.example_docs(example.read_text()) if example and example.exists() else {}
+        docs = {k: (example_docs.get(k) or fallback) for k, fallback in _envfile.KNOWN_KNOBS}
+        values = _envfile.get_all(raw) if raw else {k: "" for k, _ in _envfile.KNOWN_KNOBS}
+
+        contexts: list[str] = []
+        ctx_note = "no kubeconfig pinned on the profile"
+        if profile.kubeconfig:
+            try:
+                contexts = kubectl(profile.target().env).list_contexts()
+            except Exception:
+                ctx_note = f"could not read the contexts in {profile.kubeconfig}"
+        projects: list[dict] = []
+        try:
+            projects = gcloud(profile.target().env).projects()
+        except Exception:  # a dead gcloud is a note, not a page error
+            projects = []
+        return page("env.html", request, profile=profile, env_path=env_path, env_error=env_error,
+                    values=values, docs=docs, contexts=contexts, ctx_note=ctx_note, projects=projects)
+
+    @app.post("/p/{name}/env")
+    async def env_save(name: str, request: Request):
+        profile = load_profile(name)
+        if profile is None:
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
+        if not profile.env_file:
+            return notice(request, 422, "this profile has no env file to save to; set one in Profile settings first",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        form = await request.form()
+        # only the keys the operator filled are passed to the writer; the rest
+        # of the file is rewritten in place with its own values, untouched
+        values = {k: (form.get(k) or "").strip() for k in _envfile.KNOWN_KEYS
+                  if (form.get(k) or "").strip()}
+        try:
+            _envfile.save_env_file(Path(profile.env_file).expanduser(), values)
+        except ToolError as exc:
+            return notice(request, 422, str(exc), level="warn", link=f"/p/{name}/env", link_text="Back to the form")
+        return RedirectResponse(f"/p/{name}/env", status_code=303)
 
     @app.get("/p/{name}/tags/{app_name}", response_class=HTMLResponse)
     def tags(name: str, app_name: str, request: Request):

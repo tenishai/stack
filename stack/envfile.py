@@ -95,17 +95,21 @@ def _render(lines: list[tuple[str, str]]) -> str:
 
 
 def get(text: str, key: str) -> str:
-    """The value of `key`, or "" when it is not set. env.sh's rule: the first
-    assignment of a key wins if later lines repeat it, so we take the last
-    non-empty value the way a shell does when nothing earlier is exported."""
-    value = ""
+    """The value of `key`, or "" when it is not set."""
     for kind, payload in parse_lines(text):
         if kind != "assign":
             continue
         m = _LINE.match(payload)
         if m and m.group("key") == key:
-            value = m.group("value")
-    return value
+            return m.group("value")
+    return ""
+
+
+def get_all(text: str, keys: list[tuple[str, str]] | None = None) -> dict[str, str]:
+    """The value of every key in `keys` (default the page's knobs), "" for any
+    not set. The starting shape of the form."""
+    keys = keys if keys is not None else KNOWN_KNOBS
+    return {k: get(text, k) for k, _ in keys}
 
 
 def validate(text: str) -> None:
@@ -122,17 +126,18 @@ def validate(text: str) -> None:
 
 
 def save_env_file(path, values: dict[str, str], *, unknown_note: str = "") -> str:
-    """Write `values` back to the file, losslessly.
+    """Write the file back, losslessly.
 
-    Keys are written in KNOWN_KNOBS order, then any other keys the file already
-    carried (read-only on the page) in their original order. A key in `values`
-    that is not in the file yet is appended at the end of its group. Comments
-    and blanks that existed are kept where they were; a key whose value changed
-    or appeared gets no trailing comment of its own (env.sh would refuse it).
+    Every key the file already carries is rewritten in place with its new value
+    from `values` (its old value when `values` does not name it — unknown keys
+    survive a save untouched). The keys' order, and every comment and blank line,
+    is kept exactly. A key that is in `values` but not yet in the file is appended
+    at the end. A key whose value is a comment-free assignment never gains a
+    trailing comment of its own (env.sh would refuse one).
 
     Raises ToolError (without touching the file) when any value would carry a
     trailing comment. Returns the written text."""
-    validate("\n".join(f"{k}={v}" for k, v in values.items()))
+    validate("\n".join(f"{k}={v}" for k, v in values.items() if v))
 
     lines = parse_lines(read_env_file(path))
     # index the file's assigns so we can rewrite values in place
@@ -142,21 +147,16 @@ def save_env_file(path, values: dict[str, str], *, unknown_note: str = "") -> st
             m = _LINE.match(payload)
             if m:
                 assigns.append((i, m.group("key")))
-    keys_in_file = [k for _, k in assigns]
-    present = set(keys_in_file)
+    present = {k for _, k in assigns}
 
-    known = [k for k in KNOWN_KEYS]
-
-    # rewrite each existing assign with its new value (or its old value, if not
-    # in `values` — unknown keys survive a save untouched)
+    # rewrite each existing assign with its new value (or leave it untouched)
     for i, k in assigns:
         if k in values:
             lines[i] = ("assign", f"{k}={values[k]}")
-        # else: leave the line exactly as it was
 
-    # append any known key with a value that is not yet in the file
-    for k in known:
-        if k in values and k not in present:
+    # append any key in `values` that is not yet in the file
+    for k in values:
+        if k not in present:
             lines.append(("assign", f"{k}={values[k]}"))
 
     from pathlib import Path
@@ -191,16 +191,23 @@ def example_docs(example_text: str) -> dict[str, str]:
             continue
         key = m.group("key")
         doc = ""
-        # the nearest comment run immediately above the key
+        # the last comment line of the block sitting directly above the key.
+        # Gojira wraps a long comment over several lines; its final line is the
+        # one the key's value follows, so it reads as the key's own one-liner.
+        # An all-dashes section banner carries no doc, so the key gets none.
+        block = []
         j = i - 1
         while j >= 0 and lines[j].strip().startswith("#"):
-            doc = lines[j].strip().lstrip("#").strip()
+            block.append(lines[j].strip().lstrip("#").strip())
             j -= 1
+        if block:  # block[0] is the line closest to the key
+            if not set(block[0]) <= {"-", " "}:
+                doc = block[0]
         docs[key] = doc
     return docs
 
 
 __all__ = [
-    "KNOWN_KNOBS", "KNOWN_KEYS", "read_env_file", "parse_lines", "get", "validate",
+    "KNOWN_KNOBS", "KNOWN_KEYS", "read_env_file", "parse_lines", "get", "get_all", "validate",
     "save_env_file", "example_to_values", "example_docs",
 ]

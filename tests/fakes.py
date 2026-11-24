@@ -71,6 +71,9 @@ class FakeKubectl:
     def current_context(self):
         return "fake-context"
 
+    def list_contexts(self):
+        return list(getattr(self, "contexts", ["fake-context"]))
+
     def namespace_exists(self, ns):
         return ns in self.namespaces
 
@@ -240,3 +243,19 @@ class FakeCabal:
     def mint(self, sub, scope, ttl_days):
         self.minted.append((sub, scope, ttl_days))
         return f"h.{sub.replace(':', '-')}-{scope}.s"
+
+
+class FakeGcloud:
+    """gcloud as the profile's env-file page sees it: the account, and the
+    projects the operator can see, as (projectId, display name) pairs."""
+
+    def __init__(self, account: str = "me@example.com",
+                 projects: list[dict[str, str]] | None = None):
+        self.account = account
+        self._projects = projects or []
+
+    def account(self) -> str:
+        return self.account
+
+    def projects(self) -> list[dict[str, str]]:
+        return list(self._projects)

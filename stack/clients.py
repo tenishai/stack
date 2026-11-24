@@ -164,6 +164,7 @@ class HttpGojira:
 
 class KubectlClient(Protocol):
     def current_context(self) -> str: ...
+    def list_contexts(self) -> list[str]: ...
     def namespace_exists(self, ns: str) -> bool: ...
     def secret_exists(self, ns: str, name: str) -> bool: ...
     def secret_value(self, ns: str, name: str, key: str) -> str: ...
@@ -176,6 +177,11 @@ class KubectlClient(Protocol):
     def deployed_image(self, ns: str, deploy: str) -> str: ...
     def restart(self, ns: str, deploy: str) -> None: ...
     def port_forward(self, ns: str, target: str, local: int, remote: int) -> subprocess.Popen: ...
+
+
+class GcloudClient(Protocol):
+    def projects(self) -> list[dict[str, str]]: ...
+    def account(self) -> str: ...
 
 
 class KubectlCLI:
@@ -203,6 +209,14 @@ class KubectlCLI:
             return self._ctx[1]
         return _run(["kubectl", "config", "current-context"], check=False, timeout=30,
                     env=self._env).strip() or "(none)"
+
+    def list_contexts(self) -> list[str]:
+        """Every context the kubeconfig knows, as a pick for the page. A
+        kubeconfig the profile named that is missing or unreadable is a
+        ToolError the page shows as a note, not a page that breaks."""
+        out = _run([*self._base, "config", "get-contexts", "--no-headers"],
+                   check=False, timeout=30, env=self._env)
+        return [ln.split()[0] for ln in out.splitlines() if ln.strip() and ln.split()[0] != "CURRENT"]
 
     def namespace_exists(self, ns: str) -> bool:
         return subprocess.run([*self._base, "get", "ns", ns], capture_output=True, timeout=60,
@@ -256,6 +270,36 @@ class KubectlCLI:
     def port_forward(self, ns, target, local, remote) -> subprocess.Popen:
         return subprocess.Popen(["kubectl", *self._ctx, "-n", ns, "port-forward", target, f"{local}:{remote}"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._env)
+
+
+class GcloudCLI:
+    """gcloud, for the two lookups the profile's env-file page needs: the
+    account logged in as, and the list of projects the operator can see
+    (projectId + display name, so a name like 'untitled' can be told apart
+    from the project it holds)."""
+
+    def __init__(self, env: dict[str, str] | None = None):
+        self._env = tool_env(env)
+        if not shutil.which("gcloud"):
+            raise ToolError("gcloud is not on PATH")
+
+    def account(self) -> str:
+        out = _run(["gcloud", "config", "list", "--format="
+                    "value(core.account)"], check=False, timeout=30, env=self._env).strip()
+        return out or "(not set)"
+
+    def projects(self) -> list[dict[str, str]]:
+        out = _run(["gcloud", "projects", "list", "--format="
+                    "value(projectId,name,projectNumber)"], check=False, timeout=60, env=self._env)
+        rows = []
+        for line in out.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            row = {"projectId": parts[0], "name": parts[1] if len(parts) > 1 else "",
+                   "projectNumber": parts[2] if len(parts) > 2 else ""}
+            rows.append(row)
+        return rows
 
 
 # --- gh ---------------------------------------------------------------------

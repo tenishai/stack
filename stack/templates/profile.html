@@ -13,6 +13,7 @@
     <div><span class="k">Stack file</span><span class="v mono">{{ profile.stack_file }}</span></div>
     <div><span class="k">Cluster</span><span class="v">{{ stack.cluster.name }} <span class="muted">· {{ stack.cluster.gcp_project }} · {{ stack.cluster.location }}</span></span></div>
     <div><span class="k">Gojira context</span><span class="v mono">{{ stack.gojira.kube_context or '(current context)' }}</span></div>
+    <div><span class="k">Env file</span><span class="v"><a href="/p/{{ profile.name }}/env">{{ profile.env_file or 'not set' }} ▸</a> <span class="muted">the install's gojira.env, edited as a form</span></span></div>
   </div>
 </div>
 
