@@ -256,7 +256,13 @@ def test_preflight_reaches_open_gojira_when_the_cluster_lists_go_jira(tmp_path, 
     gojira namespace is NOT the empty case, so `preflight` reaches `open_gojira`
     (the Gojira row is whatever `open_gojira` says, not the warn). Here the
     listing has gojira, so the warn row must be absent; `open_gojira` is patched
-    to a known-good Gojira so the row is the ok row with its version."""
+    to a known-good Gojira so the row is the ok row with its version.
+    Note on the negative proof (Ember 12): at 5e4e998 this test PASSES — its
+    negative there is that the old `FakeGojira` had no `url` attribute (the ok row
+    builds `f"context {…}, {gojira.url}"`), not the bytes bug. So it pins the
+    *branch* (reachable cluster → open_gojira, not the warn), not the bytes fix;
+    the bytes bug is pinned by `test_kubectlcli_namespaces_returns_str_not_bytes`
+    alone (a real kubectl on PATH). Don't count this as a second bytes proof."""
     import stack.preflight as pf
 
     kc = FakeKubectl(ready={"gojira": (1, 1)})

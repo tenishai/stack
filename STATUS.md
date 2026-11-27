@@ -226,10 +226,14 @@ set it: **a browser check runs against a scratch profiles file, never the operat
 ## Test count
 134 passed, ruff clean, mypy clean (mypy is in the gate now).
 
-## Ember's pass (handoff/11): the 10 round, re-proven on a real cluster (5e4e998)
-- **Verdict.** The 09 items are all in — `install-gojira` ran the real `install.sh`
-  to `done` (exit 0, version read back, button relabelled), and `check` on the same
-  cluster is exactly the namespace-only state. Two live defects 5e4e998 still carried.
+## Ember's pass (handoff/11): the 10 round, re-proven (5e4e998)
+- **Verdict.** The 09 items are all in on code and fakes. (Ember 12 corrected the
+  earlier draft of this paragraph: `install-gojira` ran to `done` **in the test** —
+  with the real `_gojira_version` and the real `open_gojira` against the fakes — not
+  on a real cluster; Ember found no Cloud Build and no rolled Deployment on either
+  cluster it can read, so it counted the fake-backed proof and not a live one. The
+  first live press of the button is what note 13 set up: the throwaway `qa` cluster.)
+  Two live defects 5e4e998 still carried.
 - **Item 0 — `namespaces()` returned bytes** (`stack/clients.py`, `KubectlCLI.namespaces`):
   `subprocess.run` without `text=True` → `r.stdout` is bytes, so
   `stack.gojira.namespace not in listed` was *always* true — a running cluster
@@ -314,11 +318,22 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   no version. The four states: empty → button; namespace-only → button; installed →
   version + re-run; unknown → no claim, no button.
 
+## What handoff/01 still has (Ember 12's slice map)
+Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
+(criteria 2, 4) is accepted in note 12. What is left:
+- **Slice 4 — the GitHub App pause card (criterion 3):** the profile page shows the
+  card instead of the Gojira row + Install Gojira button when the env file has no
+  usable App id/pem; Done runs three checks (pem parses, JWT → GET /app answers for
+  that id, the installation covers the stack's repos) and writes the id + path into
+  the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
+  profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
+  the card; Done runs the three sentences against the real App once filled in.
+- **Slice 5 — criterion 5** (a missing file is a pause card, not a stop), **slice 6 —
+  criterion 7**, then **criterion 10 (the stranger run)** closes handoff/01.
+- Criteria 8 and 9 are checked at every slice.
+
 ## Next
-- **The acceptance is the last door** (criteria 1, 3, 5): the UI drives check +
-  install as one run, the profile page and the one-at-a-time rule, and the env-file
-  form. 11 is the re-proving round of the *install/check* fixes; the acceptance
-  itself is Ember's to run (same four checks as 07). Once it passes, handoff/01 is
-  closed.
-- Slice 4 (if any). Same rules: tests that fail at the parent commit, `make check`
-  green, STATUS row.
+- Slice 4 (the card) first, on `qa` + `qa-noapp`. Same rules: tests that fail at the
+  parent commit, `make check` (ruff → mypy → pytest) green, STATUS names the slice
+  with file:symbol, receipts (kube context, run id, pod name + start time, /healthz
+  line) or a sentence says it is a fake-backed claim.

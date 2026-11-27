@@ -23,6 +23,8 @@ jobs:
           env -u PYTHONPATH .venv/bin/python -m pip install -q -e ".[dev]"
       - name: Lint
         run: env -u PYTHONPATH .venv/bin/ruff check stack tests
+      - name: Type check
+        run: env -u PYTHONPATH .venv/bin/python -m mypy stack tests
       - name: Test
         run: env -u PYTHONPATH .venv/bin/python -m pytest -q
 
