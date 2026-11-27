@@ -220,6 +220,26 @@ class FakeGitHub:
         """Tests: the next dispatch on this repo completes without success."""
         self.outcomes.setdefault(repo, []).append("failure")
 
+    # --- Slice 4 (criterion 3): the two GitHub App card checks ---
+    # The handler drives these through the client; tests pin their outcomes here
+    # and read self.calls to prove the right methods ran, in order.
+
+    def app_identity(self, app_id, pem_path):
+        self.calls.append(f"app_identity:{app_id}")
+        # default: a working App (returns the id). Tests set identity_fail to a
+        # sentence to force a named failure (a) or (b).
+        if getattr(self, "identity_fail", None):
+            raise ToolError(self.identity_fail)
+        return app_id
+
+    def installation_covers(self, repos):
+        self.calls.append(f"covers:{','.join(repos)}")
+        # default: covers everything. Tests set covers_fail to a sentence to force
+        # a named (c) failure.
+        if getattr(self, "covers_fail", None):
+            raise ToolError(self.covers_fail)
+        return True
+
 
 class FakeCrane:
     def __init__(self, digests: dict[str, str] | None = None):

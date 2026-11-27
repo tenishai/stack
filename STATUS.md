@@ -328,12 +328,42 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
+- **Slice 4 — criterion 3, the GitHub App pause card, done** (`7c84eec`): the profile
+  page shows the card **instead of** the Gojira row + Install Gojira button when the
+  env file has no usable App id + pem — no id, no pem, a pem path that does not
+  exist, or a key that does not parse as RSA (`stack/ui.py::_app_usable`, four local
+  checks; the key is read only to test it, never echoed). Installed cluster → no
+  card (the gate is passed); unreadable cluster (unknown) → nothing, card or
+  button. The card's **settings table is read from the checkout's
+  `docs/github-app-setup.md` at render time** (`stack/ui.py::_app_setup_doc`) — never
+  a copy in our tree (the note: the table changed twice this month); a missing doc
+  or checkout gets one sentence naming the profile field, as the refusals do.
+  **Done** (POST `/p/{name}/app-card`, `stack/ui.py::app_card_done`) runs the three
+  checks in order, naming the first failure: (a)+(b) `GhCLI.app_identity(app_id,
+  pem_path)` (pem parses + a JWT signed with it answers `GET /app` for that id) and
+  (c) `GhCLI.installation_covers(repos)` (the installation reaches every repo the
+  stack names, or is installed on all). On a full pass it stores **only the id and
+  the pem path** in the env file through `envfile.save_env_file` (lossless for the
+  rest) and returns with the card gone. The pem's bytes never appear in a page or
+  run line (`tests/test_app_card.py::test_pem_body_never_on_the_page` greps a known
+  body). 8 new tests, 7 failing at `d603c9f`; 142 pass. `FakeGitHub` grows
+  `app_identity`/`installation_covers`. **Receipts (live, read-only):** a scratch
+  profile at the real `~/src/git/gojira` checkout with the two App lines removed
+  renders the card with the doc's current six-row permission table and the doc
+  link; a working App in the env file renders the installed state, no card.
 - **Slice 5 — criterion 5** (a missing file is a pause card, not a stop), **slice 6 —
   criterion 7**, then **criterion 10 (the stranger run)** closes handoff/01.
 - Criteria 8 and 9 are checked at every slice.
 
 ## Next
-- Slice 4 (the card) first, on `qa` + `qa-noapp`. Same rules: tests that fail at the
-  parent commit, `make check` (ruff → mypy → pytest) green, STATUS names the slice
-  with file:symbol, receipts (kube context, run id, pod name + start time, /healthz
-  line) or a sentence says it is a fake-backed claim.
+- Slice 5 (the missing-file pause card): the env file that does not exist yet is a
+  pause card on the profile page — the page names the exact path it needs, links the
+  `gojira.env.example` the profile's Gojira checkout ships (when one is under its
+  repos dir), gives the one-line copy command, and offers a **I have the file now**
+  button that re-reads the path and re-validates with `envfile.validate` (it does
+  not save the file). A missing file is a pause the operator clears, never a
+  dead-end refusal. Then slice 6 (criterion 7: a *wrong* file is a pause too, same
+  card shape, one-line fix, same re-read button), then criterion 10 (the stranger
+  run) closes the increment. Same rules as slice 4: tests that fail at the parent
+  commit, `make check` green, STATUS names the slice with file:symbol, receipts or
+  a fake-backed sentence. Criteria 8 and 9 at every slice.

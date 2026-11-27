@@ -18,7 +18,11 @@ SECRET = "SECRETVALUE123"
 NS = "gojira"   # the Gojira namespace the fake cluster does or does not have
 
 
-def _wait(run, seconds=10):
+def _wait(run, seconds=60):
+    # 60s, not 10: this waits on a real bash subprocess (the fake install.sh,
+    # which sources the env file), and a loaded CI runner spawns it slowly. The
+    # cap is a wall-clock bound on the *test*, generous enough for CI yet short
+    # enough that a genuinely hung install still fails it.
     deadline = time.monotonic() + seconds
     while run.finished is None and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -32,6 +36,24 @@ def _stack_file(tmp_path: Path) -> Path:
         "apps:\n  - {name: kobo, repo: tenishai/gojira, deploy_repo: tenishai/kobo-deploy,\n"
         "     image: r/agent-images/kobo:1, source_image: ghcr.io/tenishai/kobo}\n")
     return f
+
+
+def _app_keys(tmp_path: Path) -> tuple[str, str]:
+    """A real generated RSA key (the note is explicit: the RSA check must be real,
+    not a `fake=True`) written to a pem in the tmp dir, plus a numeric App id.
+    The key parses as an RSA private key, so `_app_usable` says the gate is
+    passed and the card is absent; the body is never echoed by the code under
+    test. Returns (app_id, pem_path)."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(serialization.Encoding.PEM,
+                            serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption())
+    p = tmp_path / "app.pem"
+    p.write_bytes(pem)
+    return ("12345", str(p))
 
 
 def _fake_install(tmp_path: Path, *, rc: int = 0) -> Path:
@@ -86,11 +108,19 @@ def _k8s(ns_exists: bool = True, ready=(1, 1), *, version: str | None = "v1.3.1"
     return k
 
 
-def _site(tmp_path, *, install: Path, kubectl, ns_exists: bool = True):
+def _site(tmp_path, *, install: Path, kubectl, ns_exists: bool = True, noapp: bool = False):
     profiles_path = tmp_path / "p.yaml"
     stack = _stack_file(tmp_path)
     env = tmp_path / "gojira.env"
-    env.write_text("# install's values\nPROJECT=vidios-qa\nCLUSTER=gojira-sandbox\n")
+    # A working GitHub App (id + a real RSA key) in the env file by default, so the
+    # card is absent and these tests exercise the slice-3 states as before. The
+    # slice-4 card tests pass noapp=True to strip the two App lines.
+    if noapp:
+        env.write_text("# install's values\nPROJECT=vidios-qa\nCLUSTER=gojira-sandbox\n")
+    else:
+        app_id, pem = _app_keys(tmp_path)
+        env.write_text("# install's values\nPROJECT=vidios-qa\nCLUSTER=gojira-sandbox\n"
+                       f"GOJIRA_GITHUB_APP_ID={app_id}\nGOJIRA_GITHUB_APP_PEM={pem}\n")
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("")
     runner = Runner()
