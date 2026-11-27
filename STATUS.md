@@ -328,7 +328,7 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
-- **Slice 4 — criterion 3, the GitHub App pause card, done** (`7c84eec`): the profile
+- **Slice 4 — criterion 3, the GitHub App pause card, done** (`19c63a8`): the profile
   page shows the card **instead of** the Gojira row + Install Gojira button when the
   env file has no usable App id + pem — no id, no pem, a pem path that does not
   exist, or a key that does not parse as RSA (`stack/ui.py::_app_usable`, four local
