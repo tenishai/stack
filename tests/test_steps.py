@@ -127,6 +127,49 @@ def test_without_auto_merge_it_waits_and_names_the_pr(home):
     assert github.calls == []
 
 
+def test_a_merge_the_rules_refuse_waits_for_the_approval_then_continues(home):
+    """GitHub's rules on the repo want a review: the installer says so with the
+    link, keeps waiting, tries its own merge again on every poll, and continues
+    the moment the merge goes through — the person only approves. At 6126f2a the
+    refusal was a ToolError straight out of merge_pr and the run stopped."""
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
+    github = FakeGitHub(runs={"o/litellm": ("completed", "success")})
+    github.refuse_merges = 2                    # two polls' worth of "needs a review"
+    kubectl = FakeKubectl(ready={"litellm": (1, 1)})
+    _, report, lines = _run(home, stack, github=github, kubectl=kubectl, merge_setup_prs=True)
+    refused = [c for c in github.calls if c.startswith("merge-refused:")]
+    merged = [c for c in github.calls if c.startswith("merge:")]
+    assert len(refused) == 2 and len(merged) == 1
+    url = merged[0].split(":", 1)[1]
+    assert any("want a review before " + url in ln and "approve it and the install continues" in ln
+               for ln in lines)
+    assert url in report.waited_on
+    assert any(n.startswith("litellm: setup PR merged, synced") for n in report.done)
+
+
+def test_a_merge_call_that_fails_is_still_a_stop(home):
+    """Only a rule refusal waits; gh failing to reach GitHub stops the run with
+    gh's own sentence. It guards the narrowing: at 6126f2a it fails only because
+    the old fake had no merge_error, not because the stop was ever missing."""
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
+    github = FakeGitHub()
+    github.merge_error = ToolError("error connecting to api.github.com: connection reset")
+    with pytest.raises(ToolError, match="connection reset"):
+        _run(home, stack, github=github, merge_setup_prs=True)
+
+
+def test_a_failed_provision_names_the_app_page(home):
+    """"See the app's page on Gojira" with no address sent a person looking; the
+    stop names the page when the client knows where Gojira is."""
+    stack = _stack(home, [{"name": "litellm", "repo": "o/litellm"}])
+    gojira = FakeGojira()
+    gojira.url = "http://127.0.0.1:18097"
+    gojira.connect_outcome["litellm"] = ("failed", "")
+    gojira.provision_outcomes[1] = ["failed"]          # the one retry fails too
+    with pytest.raises(ToolError, match=r"provision failed twice; see http://127\.0\.0\.1:18097/apps/1"):
+        _run(home, stack, gojira=gojira, iam_settle_seconds=0)
+
+
 def test_a_merged_pr_is_synced_and_an_empty_namespace_is_deployed(home):
     """A reconnect whose render matches comes back active with no pods
     (tenishai/gojira#75): the installer dispatches the workflow."""

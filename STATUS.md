@@ -328,6 +328,15 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
+- **States, not failures — a merge the repo's rules refuse** (`stack/steps.py`
+  `Installer.try_merge` / `settle_setup_pr`, `stack/clients.py` `merge_refused`): when the
+  installer merges a setup PR itself and GitHub's rules want a review, the run says so with
+  the link ("approve it and the install continues"), waits, and tries the merge again on
+  every poll, so the person only approves. gh failing to reach GitHub is still a stop. A
+  provision that fails twice now names the app's page on Gojira (`Installer.app_page`),
+  not "the app's page" with no address. Found live 2026-11-27: the first Install on a public
+  deploy repo stopped at exactly this (tenishai/litellm-deploy#13); the Gojira half is
+  tenishai/gojira#160 (a refused merge waits in `awaiting_pr` instead of `failed`).
 - **Slice 4, Ember's review fix** (this commit): `GhCLI.installation_covers(app_id, pem_path, repos)`
   takes the credential explicitly and signs with the key behind the path — at 19c63a8 the
   handler poked a private attribute holding the *path* and the method signed with that

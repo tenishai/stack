@@ -34,6 +34,22 @@ class ToolError(RuntimeError):
     """A tool said no. The message is the tool's own sentence, trimmed."""
 
 
+# What gh prints when GitHub declines a merge for a reason a person settles: a
+# branch rule wants a review or a check, the head moved. Anything else from
+# `gh pr merge` is the call failing.
+_MERGE_REFUSAL = re.compile(
+    r"rule violations|not mergeable|review (is )?required|required status check"
+    r"|protected branch|base branch was modified|cannot be cleanly created",
+    re.IGNORECASE,
+)
+
+
+def merge_refused(exc: ToolError) -> bool:
+    """GitHub refused THIS merge (a person's merge now) rather than the call
+    failing (a stop). Mirrors gojira.github.merge_refused, text side only."""
+    return bool(_MERGE_REFUSAL.search(str(exc)))
+
+
 def tool_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """The environment every tool runs in: the operator's own, minus a
     PYTHONPATH (someone else's site-packages), plus what the caller pins —
@@ -68,6 +84,7 @@ class AppRow:
 
 
 class GojiraClient(Protocol):
+    url: str   # where a person finds the app's page ("" for a fake)
     def clusters(self) -> list[dict]: ...
     def register_cluster(self, name: str, gcp_project: str, location: str, gke_cluster: str, ar_repo: str) -> None: ...
     def apps(self) -> list[AppRow]: ...

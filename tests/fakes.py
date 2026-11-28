@@ -153,6 +153,8 @@ class FakeGitHub:
         self.pr_files: dict[str, dict[str, str]] = {}
         self.user = "tester"                  # "" = not logged in
         self.org_denied: dict[str, str] = {}  # org -> why gh cannot see it
+        self.refuse_merges = 0                # merge_pr: rule refusals before one succeeds
+        self.merge_error: ToolError | None = None
 
     def login(self):
         if not self.user:
@@ -196,6 +198,13 @@ class FakeGitHub:
         return self.states.get(pr_url, "open")
 
     def merge_pr(self, pr_url):
+        if self.refuse_merges > 0:   # tests: GitHub's rules say no, this many times
+            self.refuse_merges -= 1
+            self.calls.append(f"merge-refused:{pr_url}")
+            raise ToolError("GraphQL: Repository rule violations found\n\nAt least 1 approving review "
+                            "is required by reviewers with write access. (mergePullRequest)")
+        if self.merge_error is not None:  # tests: the call itself fails
+            raise self.merge_error
         self.calls.append(f"merge:{pr_url}")
         self.states[pr_url] = "merged"
 
