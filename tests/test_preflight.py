@@ -281,3 +281,18 @@ apps:
     # the app row ran (it is not the empty-cluster "Install Gojira first" warn)
     kobo = _by(checks, "kobo: Gojira")
     assert "Install Gojira first" not in kobo.detail
+
+
+def test_a_cluster_object_with_no_clone_is_read_from_github_not_a_stop(tmp_path):
+    """check_files: a stranger clones nothing; the upstream's cluster object is
+    read from GitHub at run time, so its row is ok with a note, not a fail."""
+    from stack.model import Stack
+    from stack.preflight import check_files
+    from stack.runs import Target
+
+    f = tmp_path / "s.yaml"
+    f.write_text("cluster: {name: c, gcp_project: p, location: l}\n"
+                 "apps:\n  - {name: kobo, repo: tenishai/kobo, cluster_objects: [k8s/cluster/rbac.yaml]}\n")
+    rows = check_files(Stack.load(f), Target(stack_file=f, repos=tmp_path / "nowhere"))
+    row = next(r for r in rows if r.what == "kobo: k8s/cluster/rbac.yaml")
+    assert row.status == "ok" and "read from tenishai/kobo on GitHub" in row.detail

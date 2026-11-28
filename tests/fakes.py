@@ -185,6 +185,13 @@ class FakeGitHub:
         except KeyError:
             raise ToolError(f"{repo}: no {path}") from None
 
+    def list_dir(self, repo, path):
+        prefix = path.rstrip("/") + "/"
+        names = [p[len(prefix):] for p in self.repos.get(repo, {}) if p.startswith(prefix) and "/" not in p[len(prefix):]]
+        if not names:
+            raise ToolError(f"{repo}: no {path}")
+        return sorted(names)
+
     def open_pr(self, repo, files, title, body, branch):
         url = f"https://github.com/{repo}/pull/{100 + len(self.pr_files)}"
         self.calls.append(f"open_pr:{repo}:{branch}")

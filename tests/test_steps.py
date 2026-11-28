@@ -446,7 +446,29 @@ def test_a_changed_contract_on_a_live_app_is_provisioned_again(home):
     assert "cabal: provision pressed again (deploy repo changed)" in "\n".join(lines)
 
 
-def test_a_deploy_repo_without_the_upstream_clone_stops_with_the_path(home):
+def test_a_deploy_repo_without_the_upstream_clone_reads_github(home):
+    """A stranger clones nothing: with no clone under --repos the upstream's
+    k8s/base, gojira.yaml and cluster objects are read from GitHub as they are
+    on its default branch. At 8e8b171 this stopped with "has no k8s/base"."""
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d",
+                           "cluster_objects": ["k8s/cluster/rbac.yaml"]}])
+    github = FakeGitHub(repos={"tenishai/cabal": {
+        "gojira.yaml": "app: cabal\nclass: gateway\nsecrets_from: [cabal-secrets]\nport: 7400\narch: arm64\n",
+        "k8s/base/deployment.yaml": "kind: Deployment\n", "k8s/base/kustomization.yaml": "resources: [deployment.yaml]\n",
+        "k8s/base/README.md": "not yaml, still the upstream's\n", "k8s/cluster/rbac.yaml": "kind: ClusterRole\n",
+        "k8s/overlays/dev/x.yaml": "never: copied\n"}})
+    kubectl = FakeKubectl()
+    _, _, lines = _run(home, stack, github=github, kubectl=kubectl, merge_setup_prs=True)
+    files = github.repos["acme/d"]
+    assert sorted(files) == ["gojira.yaml", "k8s/base/README.md", "k8s/base/deployment.yaml", "k8s/base/kustomization.yaml"]
+    doc = yaml.safe_load(files["gojira.yaml"])
+    assert doc["port"] == 7400 and doc["secrets_from"] == ["cabal-secrets"] and "arch" not in doc
+    assert len(kubectl.applied) == 1 and kubectl.applied[0].endswith(".yaml")      # a temp file, then gone
+    assert not Path(kubectl.applied[0]).exists()
+    assert "cabal: k8s/base read from tenishai/cabal on GitHub" in "\n".join(lines)
+
+
+def test_a_deploy_repo_with_neither_clone_nor_github_base_stops(home):
     stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
     with pytest.raises(ToolError, match="has no k8s/base"):
         _run(home, stack, github=FakeGitHub(), merge_setup_prs=True)

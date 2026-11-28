@@ -47,12 +47,17 @@ def check_files(stack: Stack, target: Target) -> list[Check]:
                 if src.kind in ("file", "template"):
                     named.append((f"{src.kind}:{src.arg}", src.path if src.path.is_absolute() else base / src.path))
         named += [(f, base / f) for f in app.base_files]
-        named += [(f, target.repo_root / app.repo.split("/")[1] / f) for f in app.cluster_objects]
         for label, path in named:
             if path.exists():
                 out.append(Check(f"{app.name}: {label}", "ok"))
             else:
                 out.append(Check(f"{app.name}: {label}", "fail", f"no such file: {path}"))
+        # The upstream's own files (cluster objects, k8s/base) come from a clone under
+        # --repos when there is one, else from GitHub at run time: not a stop.
+        for f in app.cluster_objects:
+            path = target.repo_root / app.repo.split("/")[1] / f
+            out.append(Check(f"{app.name}: {f}", "ok") if path.exists()
+                       else Check(f"{app.name}: {f}", "ok", f"no clone under {target.repo_root}; read from {app.repo} on GitHub"))
     return out
 
 

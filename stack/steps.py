@@ -40,6 +40,7 @@ import logging
 import os
 import re
 import secrets as _secrets
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -205,10 +206,22 @@ class Installer:
     def apply_cluster_objects(self, app: App) -> None:
         for rel in app.cluster_objects:
             path = self.o.repo_root / app.repo.split("/")[1] / rel
-            if not path.is_file():
-                raise ToolError(f"{app.name}: cluster object {rel} not found at {path} "
-                                f"(clone {app.repo} under {self.o.repo_root})")
-            out = self.c.kubectl.apply_file(str(path))
+            if path.is_file():
+                out = self.c.kubectl.apply_file(str(path))
+            else:
+                # No clone under --repos: the file as it is on the upstream's default
+                # branch. A stranger clones nothing.
+                try:
+                    text = self.c.github.read_file(app.repo, rel)
+                except ToolError as exc:
+                    raise ToolError(f"{app.name}: cluster object {rel} is neither at {path} nor on "
+                                    f"GitHub ({exc})") from None
+                with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+                    f.write(text)
+                try:
+                    out = self.c.kubectl.apply_file(f.name)
+                finally:
+                    os.unlink(f.name)
             self.report.note(f"{app.name}: applied {rel} ({out.split()[-1] if out else 'ok'})", self.o.say)
 
     def ensure_deploy_repo(self, app: App) -> int:
@@ -230,12 +243,25 @@ class Installer:
     def deploy_repo_files(self, app: App) -> dict[str, str]:
         upstream = self.o.repo_root / app.repo.split("/")[1]
         base = upstream / "k8s" / "base"
-        if not base.is_dir():
-            raise ToolError(f"{app.name}: {app.repo} has no k8s/base at {base} (clone it under {self.o.repo_root})")
-        doc: dict[str, Any] = {}
-        contract = upstream / "gojira.yaml"
-        if contract.is_file():
-            doc = yaml.safe_load(contract.read_text()) or {}
+        if base.is_dir():
+            base_files = {q.name: q.read_text() for q in sorted(base.iterdir()) if q.is_file()}
+            contract_text = (upstream / "gojira.yaml").read_text() if (upstream / "gojira.yaml").is_file() else ""
+        else:
+            # No clone under --repos: the upstream's k8s/base and gojira.yaml as they
+            # are on its default branch. A stranger clones nothing.
+            try:
+                names = self.c.github.list_dir(app.repo, "k8s/base")
+            except ToolError as exc:
+                raise ToolError(f"{app.name}: {app.repo} has no k8s/base: none at {base}, and GitHub "
+                                f"says: {exc}") from None
+            base_files = {n: self.c.github.read_file(app.repo, f"k8s/base/{n}") for n in sorted(names)}
+            try:
+                contract_text = self.c.github.read_file(app.repo, "gojira.yaml")
+            except ToolError:
+                contract_text = ""
+            self.report.note(f"{app.name}: k8s/base read from {app.repo} on GitHub (no clone under "
+                             f"{self.o.repo_root})", self.o.say)
+        doc: dict[str, Any] = yaml.safe_load(contract_text) or {} if contract_text else {}
         for key in ("app", "class", "image", "environments", "cluster", "namespace",
                     "build_args", "arch", "node_selector"):
             doc.pop(key, None)
@@ -255,8 +281,8 @@ class Installer:
         files = {"gojira.yaml": "# Deploy contract written by the stack installer: the image is published upstream;\n"
                                 "# this repo holds what the deploy needs. Change the stack file, not this file.\n"
                                 + yaml.safe_dump(doc, sort_keys=False)}
-        for path in sorted(p for p in base.iterdir() if p.is_file()):
-            files[f"k8s/base/{path.name}"] = path.read_text()
+        for name, text in base_files.items():
+            files[f"k8s/base/{name}"] = text
         if app.base_files:
             self._add_base_files(app, files)
         return files
