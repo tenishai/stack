@@ -8,6 +8,9 @@ releases yet; everything is under Unreleased.
 
 ### Added
 
+- **Runs outlive the page.** Every run is a file under `runs/` beside the profiles file,
+  written as it goes; a restarted `stack ui` lists every run with its lines and how it
+  ended. A run the UI stopped under shows as failed with one line saying to press again.
 - **A missing file is a pause, not a stop.** A `file:` or `template:` source whose file is
   not there yet pauses the run: the page shows a card with the path and what the file is
   for (never its contents) and a Done button; the CLI says the same and polls. The run

@@ -161,7 +161,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
              crane: Callable = CraneCLI, github: Callable = GhCLI,
              kubectl: Callable = KubectlCLI, gcloud: Callable = GcloudCLI) -> FastAPI:
     app = FastAPI(title="stack")
-    runner = runner or _runs.Runner()
+    runner = runner or _runs.Runner(profiles_path.parent / "runs")   # runs outlive the process (criterion 7)
 
     def page(name: str, request: Request, status_code: int = 200, **ctx) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(request, name, {"runner": runner, **ctx}, status_code=status_code)
@@ -631,7 +631,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     def run_page(run_id: int, request: Request):
         run = runner.runs.get(run_id)
         if run is None:
-            return notice(request, 404, f"no run #{run_id} (runs live only while `stack ui` does)",
+            return notice(request, 404, f"no run #{run_id}",
                           title="No such run", link="/", link_text="Profiles")
         profile = load_profile(run.profile)
         stack = stack_or_error(profile)[0] if profile else None

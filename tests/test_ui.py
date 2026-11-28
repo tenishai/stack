@@ -260,3 +260,54 @@ def test_a_missing_file_is_a_pause_card_and_done_resumes(tmp_path):
     page = site.get("/runs/1").text
     assert "waiting for a file" not in page and body not in page
     assert "kobo: secret kobo-github created" in page
+
+
+def test_runs_outlive_the_process_and_an_unfinished_one_says_so(tmp_path):
+    """Criterion 7: a Runner with a store writes each run as it goes; a new Runner
+    on the same store shows every run with its lines and how it ended, numbers
+    the next run after them, and marks a run the process died under as failed
+    with the restart line. At 34ad01b runs lived in memory only."""
+    import json
+    store = tmp_path / "runs"
+
+    def perform(target, action, apps, *, say=print, **_):
+        say("== litellm")
+        say("  litellm: connected (app 1)")
+        if "boom" in apps:
+            raise ToolError("litellm: provision failed twice; see http://127.0.0.1:1/apps/1")
+        return Report(done=["litellm: connected"])
+
+    runner = Runner(store)
+    site = TestClient(make_app(tmp_path / "p.yaml", runner, perform=perform, preflight=lambda s, t: []))
+    _add(site)
+    site.post("/p/dogfood/install", data={"apps": ["litellm"]}, follow_redirects=False)
+    _wait(runner.runs[1])
+    site.post("/p/dogfood/install", data={"apps": ["boom"]}, follow_redirects=False)
+    _wait(runner.runs[2])
+    assert sorted(f.name for f in store.iterdir()) == ["1.jsonl", "2.jsonl"]
+    assert oct((store / "1.jsonl").stat().st_mode)[-3:] == "600"
+    # a third run the process died under: header and two lines, no end record
+    (store / "3.jsonl").write_text(json.dumps({"id": 3, "profile": "dogfood", "kind": "install", "what": "kobo",
+                                               "started": 1.0}) + "\n"
+                                   + json.dumps({"level": "head", "text": "kobo"}) + "\n"
+                                   + json.dumps({"level": "info", "text": "kobo: connected (app 2, new)"}) + "\n"
+                                   + '{"level": "info", "text": "half a ')          # died mid-write
+
+    again = Runner(store)                                      # `stack ui` restarted
+    site2 = TestClient(make_app(tmp_path / "p.yaml", again, perform=perform, preflight=lambda s, t: []))
+    assert sorted(again.runs) == [1, 2, 3]
+    assert again.runs[1].status == "done" and again.runs[2].status == "failed"
+    assert [ln.text for ln in again.runs[1].lines][:2] == ["litellm", "litellm: connected (app 1)"]
+    assert "stopped: litellm: provision failed twice" in again.runs[2].lines[-1].text
+    r3 = again.runs[3]
+    assert r3.status == "failed" and r3.what == "kobo" and r3.lines[-1].level == "fail"
+    assert "stack ui stopped while this run was going" in r3.lines[-1].text and "press again" in r3.lines[-1].text
+    assert [ln.text for ln in r3.lines][:2] == ["kobo", "kobo: connected (app 2, new)"]   # the half line is dropped
+    page = site2.get("/runs/3").text
+    assert "stack ui stopped while this run was going" in page and "hx-trigger" not in page
+    assert "#3" in site2.get("/p/dogfood").text
+    # the next run is numbered after what the files hold
+    site2.post("/p/dogfood/install", data={"apps": ["litellm"]}, follow_redirects=False)
+    assert 4 in again.runs
+    _wait(again.runs[4])
+    assert (store / "4.jsonl").exists() and again.runs[4].status == "done"

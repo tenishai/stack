@@ -183,6 +183,15 @@ config files travel with it (`examples/stack/`, `examples/dogfood/`) and its
 keys are generated on the first run. `--repos` is optional: an upstream's
 `k8s/base` and cluster objects are read from GitHub when no clone is there.
 
+## Runs outlive the page
+
+Every run is also a file under `runs/` beside the profiles file
+(`~/.config/stack/runs/<id>.jsonl`, mode 600): its lines as they were said, and
+how it ended. A restarted `stack ui` lists them all. A run the UI stopped under
+shows as failed with one line saying so; press again and the engine, which
+reads before it writes, continues where the cluster is. The files hold paths
+and ids, never a key or a token: nothing the run says is secret.
+
 ## What it refuses
 
 To merge a PR on a repo you own unless you said so; to touch anything the file

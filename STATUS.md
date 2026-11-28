@@ -328,6 +328,14 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
+- **Slice 6 — criterion 7, a run survives the operator** (`stack/runs.py` `Runner(store)`,
+  `Runner._keep` / `_load`, `Run.sink`, `RESTART_LINE`; `stack/ui.py` gives `make_app` the store
+  `<profiles dir>/runs/`): every run is a `<id>.jsonl` (header, a record per line, the end),
+  mode 600, written as it goes; a new `stack ui` lists them all with their lines and how they
+  ended, numbers the next run after them, and shows a run the process died under as failed
+  with one line saying so (a half-written last record is dropped). The second press is the
+  engine's own idempotence. Test: two kept runs + one unfinished file through a restarted
+  Runner and the page.
 - **Slice 5 — criterion 5, a missing file is a pause card, not a stop** (`stack/steps.py`
   `Installer._present` / `Options.on_pause`, `on_resume`, `file_wait_seconds`; `stack/runs.py`
   `Pause`, `Run.paused`, `Run.status == "paused"`, `perform(on_pause=, on_resume=)`;
