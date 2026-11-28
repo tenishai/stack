@@ -549,11 +549,9 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             return notice(request, 422, "both the App id and the pem path are needed before Done can check",
                           level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
         gh = github(env=profile.target().env)
-        # The coverage walk needs the credential the card just typed; hand it to
-        # the client, then (a)+(b) and (c) in order — the first failure names
-        # itself and stays on the card. The pem's bytes are read inside
-        # app_identity and used only to sign; they never appear here or on a page.
-        gh._app_credential = (app_id, pem)
+        # (a)+(b) then (c), in order: the first failure names itself and stays on
+        # the card. Both methods get the id and the pem's PATH and read the key
+        # themselves, used only to sign; its bytes never appear here or on a page.
         try:
             gh.app_identity(app_id, pem)
         except ToolError as exc:
@@ -565,7 +563,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         if stack is not None:
             repos = sorted({a.repo for a in stack.apps} | {a.deploy_repo for a in stack.apps if a.deploy_repo})
         try:
-            gh.installation_covers(repos)
+            gh.installation_covers(app_id, pem, repos)
         except ToolError as exc:
             return notice(request, 422, f"the App check failed: {exc}", level="warn",
                           link=f"/p/{name}", link_text=f"Back to {name}")

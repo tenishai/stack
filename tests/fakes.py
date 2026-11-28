@@ -232,7 +232,7 @@ class FakeGitHub:
             raise ToolError(self.identity_fail)
         return app_id
 
-    def installation_covers(self, repos):
+    def installation_covers(self, app_id, pem_path, repos):
         self.calls.append(f"covers:{','.join(repos)}")
         # default: covers everything. Tests set covers_fail to a sentence to force
         # a named (c) failure.

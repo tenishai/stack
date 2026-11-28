@@ -346,13 +346,12 @@ class GitHubClient(Protocol):
     # three checks. (a) the pem parses as a private key and (b) a JWT signed with it
     # answers GET /app with that id; both in one call so the card names a failure.
     def app_identity(self, app_id: str, pem_path: str) -> str: ...
-    # (c) the installation covers every repo in `repos` (or is installed on all).
-    def installation_covers(self, repos: list[str]) -> str: ...
+    # (c) the App's installations reach every repo in `repos`: listed by an
+    # installation, or owned by an account the App is installed on for all repos.
+    def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str: ...
 
 
 class GhCLI:
-    _app_credential: tuple[str, str] | None  # (app_id, pem) set by the card handler for coverage walks
-
     def __init__(self, env: dict[str, str] | None = None):
         self._env = tool_env(env)
         if not shutil.which("gh"):
@@ -532,59 +531,55 @@ class GhCLI:
             raise ToolError(f"that pem is GitHub App {got}, not {app_id}: the id and the key do not belong to the same App")
         return ""
 
-    def installation_covers(self, repos: list[str]) -> str:
-        """(c) of the card's checks: does the App's installation reach every repo
-        in `repos`? Returns "" when it covers all (or is installed on all repos),
-        else a ToolError naming the repos it cannot reach. The card supplies the
-        App id + pem path via a stored credential; the method reads them from the
-        caller's constructed client (`app_identity` is the seam that proves the
-        id+pem pair, this is the coverage walk on the installation tokens)."""
+    def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str:
+        """(c) of the card's checks: do the App's installations reach every repo in
+        `repos`? Returns "" when they do — a repo listed by an installation, or owned
+        by an account the App is installed on for all repos — and raises a ToolError
+        naming the repos they cannot reach otherwise. Signs with the key at `pem_path`
+        the way app_identity does (read here, used only to sign); app_identity has
+        already proved that id and key belong together, so this is only the walk."""
         if not repos:
             return ""
-        # Re-sign with the same credential the client was given (set by the card
-        # handler just before calling); a client built with no credential can't
-        # walk installations.
-        key = getattr(self, "_app_credential", None)
-        if key is None:
-            raise ToolError("cannot check installation coverage: no App credential was given")
-        app_id, pem = key
-        jwt = self._app_jwt(app_id, pem)
-        app_headers = {"Authorization": f"Bearer {jwt}", "Accept": "application/vnd.github+json"}
+        key = Path(pem_path).expanduser().read_text()
+        app_headers = {"Authorization": f"Bearer {self._app_jwt(app_id, key)}",
+                       "Accept": "application/vnd.github+json"}
+        reachable: set[str] = set()
+        all_of: set[str] = set()   # owners every one of whose repos is covered
         try:
             installs = httpx.get(f"{self._API}/app/installations", timeout=30, headers=app_headers)
             if installs.status_code != 200:
                 raise ToolError(f"cannot list this App's installations (HTTP {installs.status_code})")
-            reachable: set[str] = set()
-            all_repos = False
             for inst in installs.json():
-                iid = inst["id"]
-                t = httpx.post(f"{self._API}/app/installations/{iid}/access_tokens", timeout=30,
-                               headers=app_headers).json()["token"]
-                tok_headers = {"Authorization": f"Bearer {t}", "Accept": "application/vnd.github+json"}
-                # selection: "all" means every repo the account owns is covered
-                if inst.get("account") is not None and inst.get("repository_selection") == "all":
-                    all_repos = True
+                owner = str((inst.get("account") or {}).get("login", "")).lower()
+                if inst.get("repository_selection") == "all" and owner:
+                    all_of.add(owner)
+                    continue
+                tok = httpx.post(f"{self._API}/app/installations/{inst['id']}/access_tokens",
+                                 timeout=30, headers=app_headers)
+                if tok.status_code != 201:
+                    raise ToolError(f"cannot mint a token for the installation on {owner or inst['id']} "
+                                    f"(HTTP {tok.status_code})")
+                tok_headers = {"Authorization": f"Bearer {tok.json()['token']}",
+                               "Accept": "application/vnd.github+json"}
                 page = 1
                 while True:
-                    r = httpx.get(f"{self._API}/installation/repositories", params={"per_page": 100, "page": page},
-                                  timeout=30, headers=tok_headers)
+                    r = httpx.get(f"{self._API}/installation/repositories",
+                                  params={"per_page": 100, "page": page}, timeout=30, headers=tok_headers)
                     if r.status_code != 200:
-                        raise ToolError(f"cannot list repos for an installation (HTTP {r.status_code})")
-                    data = r.json()
-                    names = [repo["full_name"] for repo in data.get("repositories", [])]
+                        raise ToolError(f"cannot list the repos the installation on {owner} reaches "
+                                        f"(HTTP {r.status_code})")
+                    names = [str(repo["full_name"]).lower() for repo in r.json().get("repositories", [])]
                     reachable.update(names)
                     if len(names) < 100:
                         break
                     page += 1
         except httpx.HTTPError as exc:
             raise ToolError(f"cannot reach api.github.com to check coverage: {exc.__class__.__name__}")
-        if all_repos:
-            return ""
-        missing = sorted(set(repos) - reachable)
+        missing = sorted(x for x in set(repos)
+                         if x.lower() not in reachable and x.split("/")[0].lower() not in all_of)
         if missing:
             raise ToolError("the App is not installed on: " + ", ".join(missing))
         return ""
-
 
 # --- crane (registry-to-registry, no daemon) ---------------------------------
 

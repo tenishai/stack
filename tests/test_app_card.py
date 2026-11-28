@@ -13,10 +13,13 @@ Every test here fails at feb167f (the card, the Done endpoint, and the client's
 two methods did not exist).
 """
 
+import types
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from stack.clients import GhCLI, ToolError
 from stack.preflight import Check
 from stack.runs import Runner
 from stack.ui import make_app
@@ -260,3 +263,82 @@ def test_pem_body_never_on_the_page(tmp_path):
     after = site2.env.read_text()
     assert real_body not in after
     assert real in after
+
+# --- the real coverage walk: signs with the key file, covers per owner ---
+#
+# The handler stores and passes the pem's PATH (criterion 3: only the id and the
+# path are kept). The client must read the key behind that path and sign with it.
+# At 71fa712 installation_covers signed with the path string itself and raised
+# InvalidKeyError before any network call — a Done on a real App would have been
+# a 500 after (a)+(b) passed; FakeGitHub could not show it. These two tests drive
+# the real GhCLI against a stand-in api.github.com that verifies every App JWT
+# with the pem's public key.
+
+
+class _Resp:
+    def __init__(self, status_code: int, payload):
+        self.status_code, self._payload = status_code, payload
+
+    def json(self):
+        return self._payload
+
+
+def _github_stub(monkeypatch, pem_path: str, app_id: str, installs: list[dict],
+                 repos_by_token: dict[str, list[str]]) -> None:
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+
+    import stack.clients as clients
+
+    pub = serialization.load_pem_private_key(Path(pem_path).read_bytes(), password=None).public_key()
+    pub_pem = pub.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    def verified(headers) -> str:
+        tok = headers["Authorization"].split(" ", 1)[1]
+        if tok.startswith("tok-"):           # an installation token we minted
+            return tok
+        claims = pyjwt.decode(tok, pub_pem, algorithms=["RS256"])   # raises unless signed by the key
+        assert claims["iss"] == app_id
+        return tok
+
+    def get(url, timeout=None, headers=None, params=None):
+        tok = verified(headers)
+        if url.endswith("/app/installations"):
+            return _Resp(200, installs)
+        if url.endswith("/installation/repositories"):
+            return _Resp(200, {"repositories": [{"full_name": n} for n in repos_by_token[tok]]})
+        raise AssertionError(url)
+
+    def post(url, timeout=None, headers=None):
+        verified(headers)
+        return _Resp(201, {"token": "tok-" + url.rsplit("/", 2)[-2]})
+
+    monkeypatch.setattr(clients, "httpx",
+                        types.SimpleNamespace(get=get, post=post, HTTPError=clients.httpx.HTTPError))
+    monkeypatch.setattr(clients.shutil, "which", lambda name: "/usr/bin/gh")
+
+
+def test_real_coverage_walk_signs_with_the_key_behind_the_path(tmp_path, monkeypatch):
+    pem = _rsa_pem(tmp_path)
+    _github_stub(monkeypatch, pem, APP_ID,
+                 installs=[{"id": 7, "account": {"login": "tenishai"}, "repository_selection": "selected"}],
+                 repos_by_token={"tok-7": ["tenishai/gojira", "tenishai/kobo-deploy"]})
+    gh = GhCLI(env={})
+    assert gh.installation_covers(APP_ID, pem, ["tenishai/gojira", "tenishai/kobo-deploy"]) == ""
+    with pytest.raises(ToolError) as e:
+        gh.installation_covers(APP_ID, pem, ["tenishai/gojira", "tenishai/other"])
+    assert "tenishai/other" in str(e.value) and "tenishai/gojira" not in str(e.value)
+
+
+def test_all_repos_installation_covers_only_that_owner(tmp_path, monkeypatch):
+    """At 71fa712 any installation with repository_selection "all" passed every
+    repo, whichever account it was installed on."""
+    pem = _rsa_pem(tmp_path)
+    _github_stub(monkeypatch, pem, APP_ID,
+                 installs=[{"id": 9, "account": {"login": "someone-else"}, "repository_selection": "all"}],
+                 repos_by_token={})
+    gh = GhCLI(env={})
+    assert gh.installation_covers(APP_ID, pem, ["someone-else/anything"]) == ""
+    with pytest.raises(ToolError) as e:
+        gh.installation_covers(APP_ID, pem, ["tenishai/gojira"])
+    assert "tenishai/gojira" in str(e.value)
