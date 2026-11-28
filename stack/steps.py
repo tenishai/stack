@@ -730,6 +730,9 @@ class Installer:
                 event.clear()
             else:
                 time.sleep(self.o.poll_seconds)
+        # A file that has just appeared may still be being written (cp creates, then
+        # fills). A beat before reading it costs nothing and reads the whole file.
+        time.sleep(0.2)
         self.o.on_resume()
         self.o.say(f"  {why}: {path} is there now")
         return path

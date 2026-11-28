@@ -566,7 +566,9 @@ def test_a_missing_source_file_pauses_and_continues_when_it_appears(home):
 
         def appear():
             time.sleep(0.05)
-            path.write_text("KEY-BYTES-77")
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("KEY-BYTES-77")
+            tmp.rename(path)          # whole, the way a person's mv lands it
             ev.set()
         threading.Thread(target=appear).start()
         return ev
