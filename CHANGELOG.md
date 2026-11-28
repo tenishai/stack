@@ -8,6 +8,11 @@ releases yet; everything is under Unreleased.
 
 ### Added
 
+- **A missing file is a pause, not a stop.** A `file:` or `template:` source whose file is
+  not there yet pauses the run: the page shows a card with the path and what the file is
+  for (never its contents) and a Done button; the CLI says the same and polls. The run
+  continues when the file appears and stops only after an hour. Check says "not there
+  yet" instead of failing.
 - **A stack file for a stranger, and the path to it.** `examples/stack.yaml` deploys the
   stack from published images (litellm-deploy, cabal and kobo on ghcr, pinned by digest)
   into deploy repos of your own org; `examples/stack/` holds its two config files;

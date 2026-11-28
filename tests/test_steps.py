@@ -1,5 +1,6 @@
 """The installer against fakes: the dogfood's rebuild, step by step, twice."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -540,3 +541,50 @@ def test_install_refuses_an_app_the_file_does_not_name(home):
     o = Options(stack_dir=home, repo_root=home / "repos", say=lambda _: None)
     with pytest.raises(ToolError, match="not in the stack file: bab"):
         Installer(stack, clients, o).install(["bab"])
+
+
+# --- criterion 5: a missing file pauses the run, and the run continues when it appears ---
+
+def test_a_missing_source_file_pauses_and_continues_when_it_appears(home):
+    """The stack file names a file nobody has put there yet. The run says which
+    file and for what, tells on_pause, and continues when the file appears
+    (here: a thread writes it and sets the pause's event). The Secret then holds
+    the file's bytes, and the lines never do. At fa944a6 this was a stop
+    (FileNotFoundError out of read_text, shown as crashed)."""
+    import threading
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-github": {"private-key.pem": "file:late.pem"}}}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["kobo"] = ("active", "")
+    kubectl = FakeKubectl(ready={"kobo": (1, 1)})
+    github = FakeGitHub(runs={"o/kobo": ("completed", "success")})
+    paused = []
+
+    def on_pause(path, why):
+        paused.append((path, why))
+        ev = threading.Event()
+
+        def appear():
+            time.sleep(0.05)
+            path.write_text("KEY-BYTES-77")
+            ev.set()
+        threading.Thread(target=appear).start()
+        return ev
+
+    _, report, lines = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github,
+                            on_pause=on_pause, file_wait_seconds=5)
+    assert paused == [(home / "late.pem", "kobo: secret kobo-github/private-key.pem")]
+    assert kubectl.secrets[("kobo", "kobo-github")]["private-key.pem"] == "KEY-BYTES-77"
+    text = "\n".join(lines)
+    assert "kobo: secret kobo-github/private-key.pem needs " in text and "put it there and the run continues" in text
+    assert "is there now" in text and "KEY-BYTES-77" not in text
+
+
+def test_a_file_that_never_appears_stops_naming_it(home):
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-github": {"private-key.pem": "file:never.pem"}}}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["kobo"] = ("active", "")
+    with pytest.raises(ToolError, match=r"never\.pem still missing after 0s"):
+        _run(home, stack, gojira=gojira, kubectl=FakeKubectl(ready={"kobo": (1, 1)}),
+             github=FakeGitHub(runs={"o/kobo": ("completed", "success")}), file_wait_seconds=0.2)

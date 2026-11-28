@@ -328,6 +328,15 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
+- **Slice 5 — criterion 5, a missing file is a pause card, not a stop** (`stack/steps.py`
+  `Installer._present` / `Options.on_pause`, `on_resume`, `file_wait_seconds`; `stack/runs.py`
+  `Pause`, `Run.paused`, `Run.status == "paused"`, `perform(on_pause=, on_resume=)`;
+  `stack/ui.py` `POST /runs/{id}/resume`; `_lines.html` pause card; `check_files` warns): a
+  `file:`/`template:` source whose file is absent says which file and for what, pauses, and
+  looks again every poll or at once on Done; the file's bytes are read only after it is there
+  and reach nothing but the Secret. The CLI polls the same way with no card. Tests: the engine
+  continues when the file appears (and the bytes never reach a line), stops naming the path
+  after `file_wait_seconds`, the page shows the card and Done resumes it, Check warns.
 - **The stranger's stack file** (`examples/stack.yaml`, `examples/stack/`, `docs/install.md`):
   every app from a published image on ghcr (litellm-deploy, cabal, kobo; liminal joins when it
   has an image), deploy repos in the stranger's own org, one file brought by hand (the App's
