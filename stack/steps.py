@@ -40,6 +40,8 @@ import logging
 import os
 import re
 import secrets as _secrets
+import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -102,6 +104,12 @@ class Options:
     yes: bool = False                    # upgrade: the data_mount backup gate was answered
     merge_pins: bool = False             # upgrade: merge the pin PR this run opens (the UI: the press is the review)
     say: Callable[[str], None] = print
+    # Criterion 5: a `file:`/`template:` source whose file is absent pauses the run
+    # until a person puts it there. on_pause may answer an Event that cuts the poll
+    # short (the page's Done button); the CLI leaves both alone and polls.
+    file_wait_seconds: float = 3600.0
+    on_pause: Callable[[Path, str], threading.Event | None] = lambda path, why: None
+    on_resume: Callable[[], None] = lambda: None
 
 
 @dataclass
@@ -205,10 +213,22 @@ class Installer:
     def apply_cluster_objects(self, app: App) -> None:
         for rel in app.cluster_objects:
             path = self.o.repo_root / app.repo.split("/")[1] / rel
-            if not path.is_file():
-                raise ToolError(f"{app.name}: cluster object {rel} not found at {path} "
-                                f"(clone {app.repo} under {self.o.repo_root})")
-            out = self.c.kubectl.apply_file(str(path))
+            if path.is_file():
+                out = self.c.kubectl.apply_file(str(path))
+            else:
+                # No clone under --repos: the file as it is on the upstream's default
+                # branch. A stranger clones nothing.
+                try:
+                    text = self.c.github.read_file(app.repo, rel)
+                except ToolError as exc:
+                    raise ToolError(f"{app.name}: cluster object {rel} is neither at {path} nor on "
+                                    f"GitHub ({exc})") from None
+                with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+                    f.write(text)
+                try:
+                    out = self.c.kubectl.apply_file(f.name)
+                finally:
+                    os.unlink(f.name)
             self.report.note(f"{app.name}: applied {rel} ({out.split()[-1] if out else 'ok'})", self.o.say)
 
     def ensure_deploy_repo(self, app: App) -> int:
@@ -230,12 +250,25 @@ class Installer:
     def deploy_repo_files(self, app: App) -> dict[str, str]:
         upstream = self.o.repo_root / app.repo.split("/")[1]
         base = upstream / "k8s" / "base"
-        if not base.is_dir():
-            raise ToolError(f"{app.name}: {app.repo} has no k8s/base at {base} (clone it under {self.o.repo_root})")
-        doc: dict[str, Any] = {}
-        contract = upstream / "gojira.yaml"
-        if contract.is_file():
-            doc = yaml.safe_load(contract.read_text()) or {}
+        if base.is_dir():
+            base_files = {q.name: q.read_text() for q in sorted(base.iterdir()) if q.is_file()}
+            contract_text = (upstream / "gojira.yaml").read_text() if (upstream / "gojira.yaml").is_file() else ""
+        else:
+            # No clone under --repos: the upstream's k8s/base and gojira.yaml as they
+            # are on its default branch. A stranger clones nothing.
+            try:
+                names = self.c.github.list_dir(app.repo, "k8s/base")
+            except ToolError as exc:
+                raise ToolError(f"{app.name}: {app.repo} has no k8s/base: none at {base}, and GitHub "
+                                f"says: {exc}") from None
+            base_files = {n: self.c.github.read_file(app.repo, f"k8s/base/{n}") for n in sorted(names)}
+            try:
+                contract_text = self.c.github.read_file(app.repo, "gojira.yaml")
+            except ToolError:
+                contract_text = ""
+            self.report.note(f"{app.name}: k8s/base read from {app.repo} on GitHub (no clone under "
+                             f"{self.o.repo_root})", self.o.say)
+        doc: dict[str, Any] = yaml.safe_load(contract_text) or {} if contract_text else {}
         for key in ("app", "class", "image", "environments", "cluster", "namespace",
                     "build_args", "arch", "node_selector"):
             doc.pop(key, None)
@@ -255,8 +288,8 @@ class Installer:
         files = {"gojira.yaml": "# Deploy contract written by the stack installer: the image is published upstream;\n"
                                 "# this repo holds what the deploy needs. Change the stack file, not this file.\n"
                                 + yaml.safe_dump(doc, sort_keys=False)}
-        for path in sorted(p for p in base.iterdir() if p.is_file()):
-            files[f"k8s/base/{path.name}"] = path.read_text()
+        for name, text in base_files.items():
+            files[f"k8s/base/{name}"] = text
         if app.base_files:
             self._add_base_files(app, files)
         return files
@@ -328,7 +361,7 @@ class Installer:
                 self.report.note(f"{app.name}: configmap {name} exists", self.o.say)
                 continue
             self.c.kubectl.apply_configmap(app.namespace, name,
-                                           {k: self.resolve(app, s) for k, s in keys.items()})
+                                           {k: self.resolve(app, s, f"configmap {name}/{k}") for k, s in keys.items()})
             self.report.note(f"{app.name}: configmap {name} created", self.o.say)
 
     def apply_secrets(self, app: App) -> None:
@@ -336,7 +369,7 @@ class Installer:
             if self.c.kubectl.secret_exists(app.namespace, name):
                 self.report.note(f"{app.name}: secret {name} exists", self.o.say)
                 continue
-            data = {k: self.resolve(app, s) for k, s in keys.items()}
+            data = {k: self.resolve(app, s, f"secret {name}/{k}") for k, s in keys.items()}
             self.c.kubectl.apply_secret(app.namespace, name, data)
             del data
             self.report.note(f"{app.name}: secret {name} created ({', '.join(keys)})", self.o.say)
@@ -653,15 +686,15 @@ class Installer:
 
     # --- values -------------------------------------------------------------
 
-    def resolve(self, app: App, s: Source) -> str:
+    def resolve(self, app: App, s: Source, label: str = "") -> str:
         if s.kind == "literal":
             return s.arg
         if s.kind == "file":
-            return self._path(s).read_text().rstrip("\n")
+            return self._present(app, s, label).read_text().rstrip("\n")
         if s.kind == "gojira-token":
             return self.c.gojira.api_token()
         if s.kind == "template":
-            return self._path(s).read_text().replace("{gojira_token}", self.c.gojira.api_token()) \
+            return self._present(app, s, label).read_text().replace("{gojira_token}", self.c.gojira.api_token()) \
                 .replace("<GOJIRA_API_TOKEN>", self.c.gojira.api_token())
         if s.kind == "generate":
             return self._generated(app, s)
@@ -674,6 +707,35 @@ class Installer:
     def _path(self, s: Source) -> Path:
         """A relative `file:`/`template:` path is relative to the stack file."""
         return s.path if s.path.is_absolute() else self.o.stack_dir / s.path
+
+    def _present(self, app: App, s: Source, label: str) -> Path:
+        """The source's file, once it is there. A missing file is a pause, not a
+        stop (criterion 5): the run says which file and what it is for, tells
+        on_pause, and looks again every poll (or at once when the pause's event
+        is set) until it appears or file_wait_seconds pass. The file's contents
+        are read by the caller, after this, and go nowhere but the cluster."""
+        path = self._path(s)
+        if path.exists():
+            return path
+        why = f"{app.name}: {label or s.kind + ':' + s.arg}"
+        self.o.say(f"  {why} needs {path}, which is not there; put it there and the run continues")
+        event = self.o.on_pause(path, why)
+        deadline = time.monotonic() + self.o.file_wait_seconds
+        while not path.exists():
+            if time.monotonic() > deadline:
+                self.o.on_resume()
+                raise ToolError(f"{why}: {path} still missing after {self.o.file_wait_seconds:.0f}s")
+            if event is not None:
+                event.wait(self.o.poll_seconds)
+                event.clear()
+            else:
+                time.sleep(self.o.poll_seconds)
+        # A file that has just appeared may still be being written (cp creates, then
+        # fills). A beat before reading it costs nothing and reads the whole file.
+        time.sleep(0.2)
+        self.o.on_resume()
+        self.o.say(f"  {why}: {path} is there now")
+        return path
 
     def _generated(self, app: App, s: Source) -> str:
         """Made once, kept in a 600 file next to the stack file, reused after.

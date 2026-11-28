@@ -328,6 +328,31 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
   the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
   profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
   the card; Done runs the three sentences against the real App once filled in.
+- **Slice 6 — criterion 7, a run survives the operator** (`stack/runs.py` `Runner(store)`,
+  `Runner._keep` / `_load`, `Run.sink`, `RESTART_LINE`; `stack/ui.py` gives `make_app` the store
+  `<profiles dir>/runs/`): every run is a `<id>.jsonl` (header, a record per line, the end),
+  mode 600, written as it goes; a new `stack ui` lists them all with their lines and how they
+  ended, numbers the next run after them, and shows a run the process died under as failed
+  with one line saying so (a half-written last record is dropped). The second press is the
+  engine's own idempotence. Test: two kept runs + one unfinished file through a restarted
+  Runner and the page.
+- **Slice 5 — criterion 5, a missing file is a pause card, not a stop** (`stack/steps.py`
+  `Installer._present` / `Options.on_pause`, `on_resume`, `file_wait_seconds`; `stack/runs.py`
+  `Pause`, `Run.paused`, `Run.status == "paused"`, `perform(on_pause=, on_resume=)`;
+  `stack/ui.py` `POST /runs/{id}/resume`; `_lines.html` pause card; `check_files` warns): a
+  `file:`/`template:` source whose file is absent says which file and for what, pauses, and
+  looks again every poll or at once on Done; the file's bytes are read only after it is there
+  and reach nothing but the Secret. The CLI polls the same way with no card. Tests: the engine
+  continues when the file appears (and the bytes never reach a line), stops naming the path
+  after `file_wait_seconds`, the page shows the card and Done resumes it, Check warns.
+- **The stranger's stack file** (`examples/stack.yaml`, `examples/stack/`, `docs/install.md`):
+  every app from a published image on ghcr (litellm-deploy, cabal, kobo; liminal joins when it
+  has an image), deploy repos in the stranger's own org, one file brought by hand (the App's
+  key). `docs/install.md` walks from an empty project through Gojira to the room. The installer
+  reads an upstream's `k8s/base`, `gojira.yaml` and cluster objects from GitHub when nothing is
+  cloned under `--repos` (`GitHubClient.list_dir`, `Installer.deploy_repo_files` /
+  `apply_cluster_objects`); `check_files` says so instead of failing. README's Quickstart runs
+  this file; the dogfood file is named as ours.
 - **States, not failures — a merge the repo's rules refuse** (`stack/steps.py`
   `Installer.try_merge` / `settle_setup_pr`, `stack/clients.py` `merge_refused`): when the
   installer merges a setup PR itself and GitHub's rules want a review, the run says so with

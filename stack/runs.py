@@ -15,6 +15,7 @@ forgets them, the cluster and the repos remember.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -60,9 +61,19 @@ def open_gojira(stack: Stack, target: Target, say: Callable[[str], None] = print
 
 
 def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bool = False,
-            yes: bool = False, merge_pins: bool = False, say: Callable[[str], None] = print) -> Report:
+            yes: bool = False, merge_pins: bool = False, say: Callable[[str], None] = print,
+            on_pause: Callable[[Path, str], threading.Event | None] | None = None,
+            on_resume: Callable[[], None] | None = None) -> Report:
     """`stack install` or `stack upgrade` on `target`. Raises ToolError with
-    the sentence to show; never prints a traceback."""
+    the sentence to show; never prints a traceback. `on_pause(path, why)` is
+    told when the run waits for a file a person must put there (criterion 5)
+    and may answer an Event that cuts the wait short; `on_resume()` when the
+    file is there. The CLI passes neither and the run polls."""
+    def _no_pause(path: Path, why: str) -> threading.Event | None:
+        return None
+
+    pause_cb: Callable[[Path, str], threading.Event | None] = on_pause or _no_pause
+    resume_cb: Callable[[], None] = on_resume or (lambda: None)
     stack = Stack.load(target.stack_file)
     try:
         kubectl, gojira = open_gojira(stack, target, say)
@@ -74,7 +85,7 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
         if action == "upgrade":
             clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), crane=CraneCLI(env))
             opts = Options(stack_dir=target.stack_file.parent, repo_root=target.stack_file.parent,
-                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say)
+                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say, on_pause=pause_cb, on_resume=resume_cb)
             return Installer(stack, clients, opts).upgrade(apps)
         if action != "install":
             raise ToolError(f"no such action {action!r}")
@@ -90,7 +101,7 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
                            forward=lambda: kubectl.port_forward(ns, svc, port, 80), env=env)
         clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), cabal=cabal)
         opts = Options(stack_dir=target.stack_file.parent, repo_root=target.repo_root,
-                       merge_setup_prs=merge_setup_prs, say=say)
+                       merge_setup_prs=merge_setup_prs, say=say, on_pause=pause_cb, on_resume=resume_cb)
         return Installer(stack, clients, opts).install(apps)
     finally:
         gojira.close()
@@ -160,6 +171,16 @@ class Line:
 
 
 @dataclass
+class Pause:
+    """Slice 5 (criterion 5): the run is waiting for a person to put a file where
+    the stack file names it. The page shows the path and what the file is for,
+    never its contents; Done sets the event and the engine looks again at once."""
+    path: str
+    why: str
+    event: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
 class Run:
     id: int
     profile: str
@@ -169,14 +190,22 @@ class Run:
     finished: float | None = None
     ok: bool | None = None
     lines: list[Line] = field(default_factory=list)
+    paused: Pause | None = None
+    # Slice 6 (criterion 7): every line also goes to the run's file, so a restarted
+    # `stack ui` shows what completed. Set by the Runner; None for an unkept run.
+    sink: Callable[[dict], None] | None = field(default=None, repr=False, compare=False)
 
     @property
     def status(self) -> str:
-        return "running" if self.finished is None else ("done" if self.ok else "failed")
+        if self.finished is None:
+            return "paused" if self.paused is not None else "running"
+        return "done" if self.ok else "failed"
 
     def add(self, level: str, text: str) -> None:
         assert level in LEVELS
         self.lines.append(Line(level, text))
+        if self.sink is not None:
+            self.sink({"level": level, "text": text})
 
     def say(self, text: str) -> None:
         """The engine's `say`: `== app` headings, everything else a step."""
@@ -187,12 +216,76 @@ class Run:
             self.add("info", text.strip())
 
 
-class Runner:
-    """One run at a time, in a thread; every run kept until the process ends."""
+RESTART_LINE = ("stack ui stopped while this run was going. Nothing is lost that a second press "
+                "cannot continue: every step reads before it writes, so press again and the run "
+                "picks up where the cluster is.")
 
-    def __init__(self):
+
+class Runner:
+    """One run at a time, in a thread. With a `store` directory every run is
+    also a file there, `<id>.jsonl` (one header, then a line per line, then the
+    end), so a restarted `stack ui` shows every run that ever ran under these
+    profiles (criterion 7). A run the file never saw end is shown as failed with
+    one line saying the UI stopped under it; the engine is idempotent, so the
+    person presses again."""
+
+    def __init__(self, store: Path | None = None):
         self.runs: dict[int, Run] = {}
         self._busy = threading.Lock()
+        self.store = store
+        if store is not None:
+            store.mkdir(parents=True, exist_ok=True)
+            try:
+                store.chmod(0o700)
+            except OSError:
+                pass
+            for f in sorted(store.glob("*.jsonl"), key=lambda q: int(q.stem) if q.stem.isdigit() else 0):
+                run = self._load(f)
+                if run is not None:
+                    self.runs[run.id] = run
+
+    @staticmethod
+    def _load(f: Path) -> Run | None:
+        records = []
+        for raw in f.read_text().splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                records.append(json.loads(raw))
+            except ValueError:
+                continue   # a half-written last line: the process died mid-write
+        if not records or records[0].get("kind") is None:
+            return None
+        head = records[0]
+        run = Run(id=int(head["id"]), profile=head["profile"], kind=head["kind"], what=head.get("what", ""),
+                  started=float(head.get("started", 0)))
+        ended = None
+        for rec in records[1:]:
+            if "level" in rec:
+                run.lines.append(Line(rec["level"], rec["text"]))
+            elif "finished" in rec:
+                ended = rec
+        if ended is None:
+            run.lines.append(Line("fail", RESTART_LINE))
+            run.finished, run.ok = f.stat().st_mtime, False
+        else:
+            run.finished, run.ok = float(ended["finished"]), bool(ended.get("ok"))
+        return run
+
+    def _keep(self, run: Run) -> None:
+        """Open the run's file with its header; every later record is appended."""
+        if self.store is None:
+            return
+        path = self.store / f"{run.id}.jsonl"
+        head = {"id": run.id, "profile": run.profile, "kind": run.kind, "what": run.what, "started": run.started}
+        path.write_text(json.dumps(head) + "\n")
+        path.chmod(0o600)
+
+        def sink(rec: dict) -> None:
+            with path.open("a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        run.sink = sink
 
     def active(self) -> Run | None:
         return next((r for r in self.runs.values() if r.finished is None), None)
@@ -201,8 +294,9 @@ class Runner:
         """The new run, or None when one is already going."""
         if not self._busy.acquire(blocking=False):
             return None
-        run = Run(id=len(self.runs) + 1, profile=profile, kind=kind, what=what)
+        run = Run(id=(max(self.runs) + 1 if self.runs else 1), profile=profile, kind=kind, what=what)
         self.runs[run.id] = run
+        self._keep(run)
 
         def go():
             try:
@@ -217,6 +311,8 @@ class Runner:
                 run.ok = False
             finally:
                 run.finished = time.time()
+                if run.sink is not None:
+                    run.sink({"finished": run.finished, "ok": run.ok})
                 self._busy.release()
 
         threading.Thread(target=go, name=f"stack-run-{run.id}", daemon=True).start()

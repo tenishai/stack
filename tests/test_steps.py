@@ -1,5 +1,6 @@
 """The installer against fakes: the dogfood's rebuild, step by step, twice."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -446,7 +447,29 @@ def test_a_changed_contract_on_a_live_app_is_provisioned_again(home):
     assert "cabal: provision pressed again (deploy repo changed)" in "\n".join(lines)
 
 
-def test_a_deploy_repo_without_the_upstream_clone_stops_with_the_path(home):
+def test_a_deploy_repo_without_the_upstream_clone_reads_github(home):
+    """A stranger clones nothing: with no clone under --repos the upstream's
+    k8s/base, gojira.yaml and cluster objects are read from GitHub as they are
+    on its default branch. At 8e8b171 this stopped with "has no k8s/base"."""
+    stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d",
+                           "cluster_objects": ["k8s/cluster/rbac.yaml"]}])
+    github = FakeGitHub(repos={"tenishai/cabal": {
+        "gojira.yaml": "app: cabal\nclass: gateway\nsecrets_from: [cabal-secrets]\nport: 7400\narch: arm64\n",
+        "k8s/base/deployment.yaml": "kind: Deployment\n", "k8s/base/kustomization.yaml": "resources: [deployment.yaml]\n",
+        "k8s/base/README.md": "not yaml, still the upstream's\n", "k8s/cluster/rbac.yaml": "kind: ClusterRole\n",
+        "k8s/overlays/dev/x.yaml": "never: copied\n"}})
+    kubectl = FakeKubectl()
+    _, _, lines = _run(home, stack, github=github, kubectl=kubectl, merge_setup_prs=True)
+    files = github.repos["acme/d"]
+    assert sorted(files) == ["gojira.yaml", "k8s/base/README.md", "k8s/base/deployment.yaml", "k8s/base/kustomization.yaml"]
+    doc = yaml.safe_load(files["gojira.yaml"])
+    assert doc["port"] == 7400 and doc["secrets_from"] == ["cabal-secrets"] and "arch" not in doc
+    assert len(kubectl.applied) == 1 and kubectl.applied[0].endswith(".yaml")      # a temp file, then gone
+    assert not Path(kubectl.applied[0]).exists()
+    assert "cabal: k8s/base read from tenishai/cabal on GitHub" in "\n".join(lines)
+
+
+def test_a_deploy_repo_with_neither_clone_nor_github_base_stops(home):
     stack = _stack(home, [{"name": "cabal", "repo": "tenishai/cabal", "image": "r/x:1", "deploy_repo": "acme/d"}])
     with pytest.raises(ToolError, match="has no k8s/base"):
         _run(home, stack, github=FakeGitHub(), merge_setup_prs=True)
@@ -518,3 +541,52 @@ def test_install_refuses_an_app_the_file_does_not_name(home):
     o = Options(stack_dir=home, repo_root=home / "repos", say=lambda _: None)
     with pytest.raises(ToolError, match="not in the stack file: bab"):
         Installer(stack, clients, o).install(["bab"])
+
+
+# --- criterion 5: a missing file pauses the run, and the run continues when it appears ---
+
+def test_a_missing_source_file_pauses_and_continues_when_it_appears(home):
+    """The stack file names a file nobody has put there yet. The run says which
+    file and for what, tells on_pause, and continues when the file appears
+    (here: a thread writes it and sets the pause's event). The Secret then holds
+    the file's bytes, and the lines never do. At fa944a6 this was a stop
+    (FileNotFoundError out of read_text, shown as crashed)."""
+    import threading
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-github": {"private-key.pem": "file:late.pem"}}}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["kobo"] = ("active", "")
+    kubectl = FakeKubectl(ready={"kobo": (1, 1)})
+    github = FakeGitHub(runs={"o/kobo": ("completed", "success")})
+    paused = []
+
+    def on_pause(path, why):
+        paused.append((path, why))
+        ev = threading.Event()
+
+        def appear():
+            time.sleep(0.05)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("KEY-BYTES-77")
+            tmp.rename(path)          # whole, the way a person's mv lands it
+            ev.set()
+        threading.Thread(target=appear).start()
+        return ev
+
+    _, report, lines = _run(home, stack, gojira=gojira, kubectl=kubectl, github=github,
+                            on_pause=on_pause, file_wait_seconds=5)
+    assert paused == [(home / "late.pem", "kobo: secret kobo-github/private-key.pem")]
+    assert kubectl.secrets[("kobo", "kobo-github")]["private-key.pem"] == "KEY-BYTES-77"
+    text = "\n".join(lines)
+    assert "kobo: secret kobo-github/private-key.pem needs " in text and "put it there and the run continues" in text
+    assert "is there now" in text and "KEY-BYTES-77" not in text
+
+
+def test_a_file_that_never_appears_stops_naming_it(home):
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-github": {"private-key.pem": "file:never.pem"}}}])
+    gojira = FakeGojira()
+    gojira.connect_outcome["kobo"] = ("active", "")
+    with pytest.raises(ToolError, match=r"never\.pem still missing after 0s"):
+        _run(home, stack, gojira=gojira, kubectl=FakeKubectl(ready={"kobo": (1, 1)}),
+             github=FakeGitHub(runs={"o/kobo": ("completed", "success")}), file_wait_seconds=0.2)

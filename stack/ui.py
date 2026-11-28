@@ -10,6 +10,7 @@ Served on localhost only: one operator, their machine, their credentials.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -160,7 +161,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
              crane: Callable = CraneCLI, github: Callable = GhCLI,
              kubectl: Callable = KubectlCLI, gcloud: Callable = GcloudCLI) -> FastAPI:
     app = FastAPI(title="stack")
-    runner = runner or _runs.Runner()
+    runner = runner or _runs.Runner(profiles_path.parent / "runs")   # runs outlive the process (criterion 7)
 
     def page(name: str, request: Request, status_code: int = 200, **ctx) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(request, name, {"runner": runner, **ctx}, status_code=status_code)
@@ -312,8 +313,18 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         target = profile.target()
 
         def work(run: _runs.Run):
+            # Criterion 5: a file the stack file names and nobody has put there yet is a
+            # pause card on the run page (path and purpose, never contents), not a stop.
+            def on_pause(path: Path, why: str) -> threading.Event:
+                run.paused = _runs.Pause(str(path), why)
+                return run.paused.event
+
+            def on_resume() -> None:
+                run.paused = None
+
             # The press is the review: PRs this run opens on the install's own repos are merged by it.
-            report = perform(target, "install", apps, merge_setup_prs=True, merge_pins=True, say=run.say)
+            report = perform(target, "install", apps, merge_setup_prs=True, merge_pins=True, say=run.say,
+                             on_pause=on_pause, on_resume=on_resume)
             run.add("ok", f"done: {len(report.done)} steps")
 
         return _started(request, runner.start(name, "install", ", ".join(apps) or "every app", work))
@@ -620,11 +631,23 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     def run_page(run_id: int, request: Request):
         run = runner.runs.get(run_id)
         if run is None:
-            return notice(request, 404, f"no run #{run_id} (runs live only while `stack ui` does)",
+            return notice(request, 404, f"no run #{run_id}",
                           title="No such run", link="/", link_text="Profiles")
         profile = load_profile(run.profile)
         stack = stack_or_error(profile)[0] if profile else None
         return page("run.html", request, run=run, env=environment(stack))
+
+    @app.post("/runs/{run_id}/resume")
+    def run_resume(run_id: int, request: Request):
+        """The pause card's Done: the person says the file is there; the engine
+        looks at once instead of at its next poll. Nothing else changes: a file
+        still missing keeps the card up."""
+        run = runner.runs.get(run_id)
+        if run is None:
+            return notice(request, 404, f"no run #{run_id}", title="No such run", link="/", link_text="Profiles")
+        if run.paused is not None:
+            run.paused.event.set()
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}/lines", response_class=HTMLResponse)
     def run_lines(run_id: int, request: Request):
