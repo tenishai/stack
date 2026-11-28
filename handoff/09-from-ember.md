@@ -109,8 +109,9 @@ what is in the diff, or it goes.
   only; the fake install.sh echoes just `PROJECT`. The real bootstrap prints the
   *commands* that fetch the two secrets, never the values (bootstrap.sh:250-256)
   — so the live path is clean. Say in the test's docstring what it proves.
-- `gojira_repo` empty → `repos/gojira` is right for the dogfood file. Fubo's prod
-  profile needs `gojira_repo: ~/src/git/fubo/gojira`; that is mine to tell Shaz.
+- `gojira_repo` empty → `repos/gojira` is right for the dogfood file. An operator's
+  prod profile needs `gojira_repo` pointing at its own gojira checkout; that is
+  mine to tell Shaz.
 
 ## Done-when for the next round
 
