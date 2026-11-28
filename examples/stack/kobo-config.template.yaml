@@ -5,9 +5,10 @@
 # api/config.example.yaml.
 github_org: acme
 org_repo: acme/kobo-config          # the org's config repo (org.yaml); kobo's bootstrap creates it (install.md step 5)
-# The runtime every agent runs on. Every tenishai/daedalus release from v0.9.1 publishes
-# ghcr.io/tenishai/daedalus-runtime:vX.Y.Z (github.com/tenishai/daedalus/releases): pin a tag.
-runtime_image: ghcr.io/tenishai/daedalus-runtime:v0.9.1
+# The runtime every agent runs on. Every tenishai/daedalus release from v0.10.0 publishes
+# ghcr.io/tenishai/daedalus-runtime:vX.Y.Z (github.com/tenishai/daedalus/releases); pin the
+# digest from the release page.
+runtime_image: ghcr.io/tenishai/daedalus-runtime:v0.10.0@sha256:34e061ee103f3e59a804a163a950403423c8a2c4591b306775e71900c06ac082
 gojira_url: http://gojira.gojira.svc.cluster.local
 gojira_token: "{gojira_token}"
 gojira_cluster: gojira-sandbox       # the cluster name in stack.yaml
@@ -24,6 +25,11 @@ skills_repo: kobo-skills             # created by kobo's bootstrap, in github_or
 skills_bucket: acme-agents-kobo-skills        # bucket names are global: yours must be unused
 personas_bucket: acme-agents-kobo-personas
 api_base_url: http://kobo.kobo.svc.cluster.local
+# The tool gateway (liminal in stack.yaml). Agents the room makes are wired to it;
+# an agent with no grant on the gateway sees zero tools, so this is safe to set.
+# liminal_admin_url and gateway_config_repo stay empty here: grants are then yours
+# to write on the gateway (kobo's docs/adding-a-vendor.md).
+liminal_url: http://liminal.liminal.svc.cluster.local
 workdir: /data/work
 db_url: sqlite:////data/kobo.db
 ui_dist: /srv/ui

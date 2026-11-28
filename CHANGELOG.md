@@ -22,7 +22,12 @@ releases yet; everything is under Unreleased.
   `docs/install.md` goes from an empty project through Gojira to the room, naming the
   two pauses that are yours. The installer reads an upstream's `k8s/base`, `gojira.yaml`
   and cluster objects from GitHub when no clone is under `--repos`, so nothing is cloned.
-  liminal joins the file when tenishai/liminal publishes an image.
+- **The stranger's file is the whole stack, every image a release.** liminal joined
+  `examples/stack.yaml` the day tenishai/liminal published an image (v0.12.0); cabal moved
+  to v0.5.2, whose image carries liminal's client (0.5.1's refused the `[liminal]` block
+  the identity file already had); litellm-deploy is pinned to its first release, v0.1.0,
+  and the kobo template's runtime to daedalus-runtime v0.10.0, the first published. Every
+  `image:` line now carries a digest, and a test keeps it so.
 - **A merge the repo's rules refuse waits for the approval and continues.** The installer
   says so with the link, retries its own merge on every poll, and goes on when the merge
   lands; gh failing to reach GitHub is still a stop. A provision that fails twice names

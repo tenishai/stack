@@ -9,9 +9,8 @@
 # gitignored) and the one file you bring is your GitHub App's private key.
 #
 # Order is the dependency order: litellm (the model proxy), cabal (the switchboard,
-# needs litellm's key), then kobo (the room, holds a token minted on that cabal).
-# liminal, the tool gateway, joins this file when tenishai/liminal publishes an
-# image; until then the room runs without it.
+# needs litellm's key), liminal (the tool gateway, holds a token minted on that
+# cabal), then kobo (the room, another token on that cabal).
 
 gojira:
   namespace: gojira
@@ -27,9 +26,9 @@ cluster:
 apps:
   - name: litellm
     repo: tenishai/litellm-deploy                 # the upstream: its k8s/base travels into the deploy repo
-    # Pin by digest from the release notes (github.com/tenishai/litellm-deploy/releases):
-    #   image: ghcr.io/tenishai/litellm-deploy:v0.1.0@sha256:…
-    image: ghcr.io/tenishai/litellm-deploy:v0.1.0
+    # Each image: line is a release, pinned by the digest on its release page
+    # (github.com/tenishai/<repo>/releases); a tag moves, a digest does not.
+    image: ghcr.io/tenishai/litellm-deploy:v0.1.0@sha256:797150bba8bd7aa00676cf5dcf14cfaa9dd56ecedcf46a9721d5b0f35d477ee4
     source_image: ghcr.io/tenishai/litellm-deploy   # where releases are published; the UI's release picker reads it
     deploy_repo: acme/infra-litellm-deploy          # created if missing; gojira.yaml + k8s/base, nothing else
     workload_class: web
@@ -42,7 +41,7 @@ apps:
 
   - name: cabal
     repo: tenishai/cabal
-    image: ghcr.io/tenishai/cabal:v0.5.1@sha256:d20dfd4ad66be03149fea7352cb2e1baf82cdb251d9f18b0d55df903b2366a74
+    image: ghcr.io/tenishai/cabal:v0.5.2@sha256:2e5baea1d11ff7ab61802b1f0b636d10d7ebcf01d724575046ac010c4cec78eb   # 0.5.2 carries liminal's client; the [liminal] block in cabal-identity.toml needs it
     source_image: ghcr.io/tenishai/cabal
     deploy_repo: acme/infra-cabal-deploy
     bootstrap: cabal           # catch the bootstrap code from its log, log in, mint the tokens below
@@ -53,6 +52,15 @@ apps:
       cabal-secrets:
         CABAL_MASTER_KEY: generate:32
         LITELLM_MASTER_KEY: generate:32:litellm-master-key
+
+  - name: liminal
+    repo: tenishai/liminal
+    image: ghcr.io/tenishai/liminal:v0.12.0@sha256:0ddd7a925e66522ad2837e030e5e3aa61f7f300830c0decbc1985ea906c8b917
+    source_image: ghcr.io/tenishai/liminal
+    deploy_repo: acme/infra-liminal-deploy
+    secrets:
+      liminal-secrets:
+        LIMINAL_CABAL_TOKEN: cabal-token:service:liminal:secrets-fetch   # the gateway fetches vendor credentials from cabal with it
 
   - name: kobo
     repo: tenishai/kobo

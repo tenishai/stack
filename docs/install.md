@@ -13,16 +13,13 @@ every app from a published image, each with a small deploy repo of yours.
 | Gojira | the deploy platform: it takes a repo (or an image) and runs it with an identity, a namespace, probes, sizing | [tenishai/gojira](https://github.com/tenishai/gojira), installed by its own `make install` |
 | litellm | the model proxy in front of Vertex AI | `ghcr.io/tenishai/litellm-deploy` |
 | cabal | the switchboard: agents and the room reach each other through it | `ghcr.io/tenishai/cabal` |
+| liminal | the tool gateway: agents reach vendors (GitHub, Datadog, the web) through it, with credentials cabal holds | `ghcr.io/tenishai/liminal` |
 | kobo | the room: a web UI where people make and talk to agents | `ghcr.io/tenishai/kobo` |
 
 Each app gets a repo of yours, `acme/infra-<app>-deploy`, holding only a
 `gojira.yaml` and the upstream's `k8s/base`. The installer writes it, Gojira
 connects it, and its CI copies the published image into your project's own
 registry and applies the manifests. Nothing is built.
-
-liminal, the tool gateway, is not in the file yet: tenishai/liminal publishes
-wheels, not an image. The room runs without it; agents have no vendor tools
-until it joins.
 
 ## Before you start
 
