@@ -39,6 +39,8 @@ class Target:
     cbl: str = ""
     cabal_port: int = 17497
     env: dict[str, str] = field(default_factory=dict)
+    values: dict[str, str] = field(default_factory=dict)   # org/project/region/cluster: fill the stack file's tokens
+    env_file: Path | None = None                            # the install's gojira.env (the App's id + pem for a template)
 
     @property
     def repo_root(self) -> Path:
@@ -74,7 +76,10 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
 
     pause_cb: Callable[[Path, str], threading.Event | None] = on_pause or _no_pause
     resume_cb: Callable[[], None] = on_resume or (lambda: None)
-    stack = Stack.load(target.stack_file)
+    try:
+        stack = Stack.load(target.stack_file, target.values)
+    except ValueError as exc:
+        raise ToolError(f"{target.stack_file}: {str(exc).splitlines()[0]}") from None
     try:
         kubectl, gojira = open_gojira(stack, target, say)
     except ToolError as exc:
@@ -85,7 +90,8 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
         if action == "upgrade":
             clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), crane=CraneCLI(env))
             opts = Options(stack_dir=target.stack_file.parent, repo_root=target.stack_file.parent,
-                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say, on_pause=pause_cb, on_resume=resume_cb)
+                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say, on_pause=pause_cb, on_resume=resume_cb,
+                           values=target.values, env_file=target.env_file)
             return Installer(stack, clients, opts).upgrade(apps)
         if action != "install":
             raise ToolError(f"no such action {action!r}")
@@ -101,7 +107,8 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
                            forward=lambda: kubectl.port_forward(ns, svc, port, 80), env=env)
         clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), cabal=cabal)
         opts = Options(stack_dir=target.stack_file.parent, repo_root=target.repo_root,
-                       merge_setup_prs=merge_setup_prs, say=say, on_pause=pause_cb, on_resume=resume_cb)
+                       merge_setup_prs=merge_setup_prs, say=say, on_pause=pause_cb, on_resume=resume_cb,
+                       values=target.values, env_file=target.env_file)
         return Installer(stack, clients, opts).install(apps)
     finally:
         gojira.close()
@@ -139,7 +146,7 @@ def set_image(target: Target, app_name: str, tag: str, crane: CraneClient) -> tu
     the digest read from `source_image:<tag>` — the receipt the file keeps, and what
     `stack upgrade` verifies after the copy. One line changes; the rest of the file,
     comments included, is left as the operator wrote it. Returns (old, new)."""
-    stack = Stack.load(target.stack_file)
+    stack = Stack.load(target.stack_file, target.values)
     app = next((a for a in stack.apps if a.name == app_name), None)
     if app is None:
         raise ToolError(f"not in the stack file: {app_name}")
@@ -154,7 +161,9 @@ def set_image(target: Target, app_name: str, tag: str, crane: CraneClient) -> tu
         raise ToolError(f"{app.name}: expected one image: line naming {repo} in {target.stack_file}, found {len(found)}")
     new = f"{repo}:{tag}@{digest}"
     text = line.sub(lambda m: f"{m.group(1)}image: {new}   # {tag}, pinned by stack ui", text, count=1)
-    after = Stack.model_validate(__import__("yaml").safe_load(text))   # still a stack file, with the new pin
+    from stack.site import fill
+
+    after = Stack.model_validate(__import__("yaml").safe_load(fill(text, target.values, allow=())))   # still a stack file, with the new pin
     if next(a for a in after.apps if a.name == app_name).image != new:
         raise ToolError(f"{app.name}: the rewritten file does not carry the new image")
     target.stack_file.write_text(text)

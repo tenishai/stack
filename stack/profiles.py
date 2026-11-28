@@ -35,6 +35,12 @@ class Profile(BaseModel):
     cbl: str = ""             # the cabal CLI, for a stack that bootstraps cabal (--cbl)
     env_file: str = ""        # the install's gojira.env; recorded now, used by the install flow (#12 increment 2)
     gojira_repo: str = ""     # the profile's Gojira checkout (Install Gojira runs its scripts/install.sh); empty = the repos dir's gojira clone
+    # The four things the install is told (stack.site): they fill the stack
+    # file's tokens and write the env file. Empty = the stack file carries none.
+    org: str = ""             # the GitHub organization the deploy repos, kobo's config repo and the agents live in
+    gcp_project: str = ""     # the GCP project (the cluster, the registry, the identities)
+    region: str = ""          # where the cluster is (us-central1)
+    cluster: str = ""         # the GKE cluster's name, also the name it is registered under in Gojira
 
     @model_validator(mode="after")
     def _paths(self):
@@ -51,12 +57,22 @@ class Profile(BaseModel):
             out["CLOUDSDK_CORE_ACCOUNT"] = self.cloud_account
         return out
 
+    def values(self) -> dict[str, str]:
+        """The four, by token name, only those set."""
+        pairs = (("org", self.org), ("project", self.gcp_project), ("region", self.region), ("cluster", self.cluster))
+        return {k: v.strip() for k, v in pairs if v.strip()}
+
+    def values_complete(self) -> bool:
+        return len(self.values()) == 4
+
     def target(self) -> Target:
         return Target(
             stack_file=Path(self.stack_file).expanduser(),
             repos=Path(self.repos).expanduser() if self.repos else None,
             cbl=str(Path(self.cbl).expanduser()) if self.cbl else "",
             env=self.env(),
+            values=self.values(),
+            env_file=Path(self.env_file).expanduser() if self.env_file else None,
         )
 
 

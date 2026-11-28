@@ -210,7 +210,14 @@ class Stack(BaseModel):
         return self
 
     @classmethod
-    def load(cls, path: str | Path) -> Stack:
+    def load(cls, path: str | Path, values: dict[str, str] | None = None) -> Stack:
+        """The file, with its `{org}` / `{project}` / `{region}` / `{cluster}`
+        tokens filled from `values` first (stack.site): a stranger's file is
+        read as written, the profile supplies the four. A token with no value is
+        a ValueError naming it, before YAML sees the text."""
         import yaml
 
-        return cls.model_validate(yaml.safe_load(Path(path).read_text()) or {})
+        from stack.site import fill
+
+        text = fill(Path(path).read_text(), values or {}, allow=())
+        return cls.model_validate(yaml.safe_load(text) or {})

@@ -110,6 +110,11 @@ class Options:
     file_wait_seconds: float = 3600.0
     on_pause: Callable[[Path, str], threading.Event | None] = lambda path, why: None
     on_resume: Callable[[], None] = lambda: None
+    # The four values the profile holds (stack.site) fill a `template:` file's
+    # tokens beside {gojira_token}; {app_id} and {installation_id} come from the
+    # env file's App and GitHub, read only when a template names them.
+    values: dict[str, str] = field(default_factory=dict)
+    env_file: Path | None = None
 
 
 @dataclass
@@ -694,8 +699,7 @@ class Installer:
         if s.kind == "gojira-token":
             return self.c.gojira.api_token()
         if s.kind == "template":
-            return self._present(app, s, label).read_text().replace("{gojira_token}", self.c.gojira.api_token()) \
-                .replace("<GOJIRA_API_TOKEN>", self.c.gojira.api_token())
+            return self._filled(app, label, self._present(app, s, label).read_text())
         if s.kind == "generate":
             return self._generated(app, s)
         if s.kind == "cabal-token":
@@ -703,6 +707,45 @@ class Installer:
                 raise ToolError(f"{app.name}: needs a cabal token but cabal is not up yet")
             return self.c.cabal.mint(s.cabal_sub, s.cabal_scope, self.o.token_ttl_days)
         raise ToolError(f"unknown source {s.kind}")
+
+    def _filled(self, app: App, label: str, text: str) -> str:
+        """A template with every token filled: the profile's four, Gojira's token,
+        and — only when the template names them — the App's id from the env file
+        and its installation id on the org, read from GitHub with the App's own
+        key. The key's bytes are read by the client to sign, never kept here."""
+        from stack.site import fill, tokens_in
+
+        token = self.c.gojira.api_token()
+        values = {**self.o.values, "gojira_token": token}
+        wanted = tokens_in(text) & {"app_id", "installation_id"}
+        if wanted:
+            values.update(self._app_values(app, label, "installation_id" in wanted))
+        try:
+            return fill(text, values, allow=()).replace("<GOJIRA_API_TOKEN>", token)
+        except ValueError as exc:
+            raise ToolError(f"{app.name}: {label}: {exc}") from None
+
+    def _app_values(self, app: App, label: str, with_installation: bool) -> dict[str, str]:
+        from stack import envfile
+
+        if self.o.env_file is None or not self.o.env_file.exists():
+            raise ToolError(f"{app.name}: {label} names the GitHub App ({{app_id}}) but this run has no env file "
+                            "to read GOJIRA_GITHUB_APP_ID from (the profile's env file; --env-file on the command line)")
+        vals = envfile.get_all(self.o.env_file.read_text())
+        app_id, pem = vals.get("GOJIRA_GITHUB_APP_ID", ""), vals.get("GOJIRA_GITHUB_APP_PEM", "")
+        if not app_id:
+            raise ToolError(f"{app.name}: {label} names the GitHub App but {self.o.env_file} has no "
+                            "GOJIRA_GITHUB_APP_ID yet (the App card)")
+        out = {"app_id": app_id}
+        if with_installation:
+            if not pem:
+                raise ToolError(f"{app.name}: {label} needs the App's installation id, and {self.o.env_file} "
+                                "has no GOJIRA_GITHUB_APP_PEM to read it with")
+            org = self.o.values.get("org") or app.connected_repo.split("/")[0]
+            if not hasattr(self, "_installation_id"):
+                self._installation_id = self.c.github.installation_id(app_id, pem, org)
+            out["installation_id"] = self._installation_id
+        return out
 
     def _path(self, s: Source) -> Path:
         """A relative `file:`/`template:` path is relative to the stack file."""

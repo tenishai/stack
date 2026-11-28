@@ -22,9 +22,18 @@ Run it twice and the second run finds everything present and says so.
 
 ```bash
 git clone https://github.com/tenishai/stack && cd stack
-uv venv .venv && uv sync --locked
-cp -r examples/stack.yaml examples/stack ./   # then replace `acme` with your org and project
-.venv/bin/stack install stack.yaml --merge-setup-prs --cbl <path to cabal's cbl>
+uv venv .venv && uv sync --locked --extra ui
+.venv/bin/stack ui          # localhost:8097: a profile, four things, the buttons
+```
+
+Nothing in `examples/stack.yaml` is edited: it carries `{org}`, `{project}`,
+`{region}` and `{cluster}`, and the profile fills them. The same from a terminal:
+
+```bash
+.venv/bin/stack env examples/stack.yaml --env-file gojira.env --gojira-repo ../gojira \
+    --set org=<your org> --set project=<your project> --set region=us-central1 --set cluster=gojira-sandbox
+.venv/bin/stack install examples/stack.yaml --merge-setup-prs --cbl <path to cabal's cbl> \
+    --env-file gojira.env --set org=… --set project=… --set region=… --set cluster=…
 ```
 
 [docs/install.md](docs/install.md) is the whole path, from an empty project

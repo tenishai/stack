@@ -6,6 +6,29 @@ the 11 round re-proved the install/check fixes on a real cluster and found
 two live defects 5e4e998 still carried (both now fixed, plus mypy in the gate).
 
 ## Done
+- **The page asks four things** (2026-11-28, Ember; Shaz's order: start the UI → env →
+  roles → Install Gojira → the apps). `stack/site.py` (new): `fill` (the stack file's
+  `{org}` `{project}` `{region}` `{cluster}` tokens, named when missing),
+  `env_values` (PROJECT/REGION/CLUSTER, `GOJIRA_TERRAFORM=1`, `GOJIRA_GRANTABLE_ROLES` and
+  `_CLUSTER_ROLES` as the union of what the apps' contracts ask for — the upstream's
+  gojira.yaml read from a clone under --repos else GitHub, the stack file's `contract:` over
+  it, the same merge `deploy_repo_files` makes — and `GOJIRA_ENVIRONMENT_CLUSTERS`),
+  `write_env` (lossless over an existing file; a new file starts from the checkout's
+  `gojira.env.example`). `Stack.load(path, values)`; `Profile.org/gcp_project/region/cluster`
+  + `values()`; `Target.values/env_file` → `Options.values/env_file`; `Installer._filled`
+  fills a `template:` with the four + `{gojira_token}` + `{app_id}` (env file) +
+  `{installation_id}` (`GitHubClient.installation_id`, new on GhCLI + fake). UI:
+  `_values_card.html` on both sides of the parse guard, `POST /p/{name}/values` (saves the
+  profile, writes the env file, 422 sentences for each refusal), `_derived_in_env` reads the
+  file back. CLI: `--set NAME=VALUE` on check/install/upgrade, `--env-file` on install,
+  `stack env`. `examples/stack.yaml` + the kobo template carry tokens, no `acme`.
+  Tests: `tests/test_site.py` (6), `tests/test_values_card.py` (5), +2 steps, +1 cli; 10 fail
+  at ae032c8 (run in a worktree of it with the new files). make check: ruff, mypy 28 files,
+  163 pass. LIVE (read-only on GitHub, a scratch env file): the branch's UI on :8098 with
+  the real `examples/stack.yaml`, org tenishai / project shaz-learning → the page named the
+  four tokens, one press wrote a 94-line env file from the real example carrying the six
+  roles kobo's contract asks for, `kobo-room`, `{dev: gojira-sandbox}`, and the strip then
+  read `gke_shaz-learning_us-central1_gojira-sandbox`.
 - Makefile `check` (ruff → mypy → pytest; mypy added to the dev extra and the gate). `make install` now `uv sync --locked`.
 - Slice 1 — install's done is the rolled deployment:
   - `stack/steps.py`: `install_app` ends image apps in `wait_rolled(app, digest)`.
@@ -397,6 +420,17 @@ Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
 - Criteria 8 and 9 are checked at every slice.
 
 ## Next
+- One press for the whole file (the apps in order after the cluster is registered), with
+  kobo's bootstrap (`python -m kobo_api.bootstrap` in the pod) and restart as the last two
+  steps and the room's port-forward on the done page (install.md 5–7 by hand today).
+- The page before a cluster exists: `gojira_state` is "unknown" when the kubeconfig has no
+  context yet, so the App card and Install Gojira are not offered though terraform would make
+  the cluster; a "no cluster yet" state that offers Install Gojira when the env file says
+  `GOJIRA_TERRAFORM=1`.
+- The GitHub App from a manifest (two clicks: Create on GitHub, Install) in place of the
+  card's typed id and pem path; `installation_id` already reads the installation.
+- Drop `cbl`: cabal's login and mint over its HTTP API.
+- A bootstrap command that fetches stack and Gojira and checks the tools, so step 1 is one line.
 - Slice 5 (the missing-file pause card): the env file that does not exist yet is a
   pause card on the profile page — the page names the exact path it needs, links the
   `gojira.env.example` the profile's Gojira checkout ships (when one is under its

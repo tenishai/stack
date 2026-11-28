@@ -367,6 +367,8 @@ class GitHubClient(Protocol):
     # (c) the App's installations reach every repo in `repos`: listed by an
     # installation, or owned by an account the App is installed on for all repos.
     def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str: ...
+    # The id of the App's installation on an org (kobo's config wants it).
+    def installation_id(self, app_id: str, pem_path: str, org: str) -> str: ...
 
 
 class GhCLI:
@@ -555,6 +557,25 @@ class GhCLI:
         if got != str(app_id):
             raise ToolError(f"that pem is GitHub App {got}, not {app_id}: the id and the key do not belong to the same App")
         return ""
+
+    def installation_id(self, app_id: str, pem_path: str, org: str) -> str:
+        """The id of this App's installation on `org` — the number at the end of
+        github.com/organizations/<org>/settings/installations/<id>, which kobo's
+        config template wants — read with the App's own key (used only to sign).
+        A ToolError when the App is not installed there."""
+        key = Path(pem_path).expanduser().read_text()
+        headers = {"Authorization": f"Bearer {self._app_jwt(app_id, key)}",
+                   "Accept": "application/vnd.github+json"}
+        try:
+            r = httpx.get(f"{self._API}/app/installations", params={"per_page": 100}, timeout=30, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ToolError(f"cannot list this App's installations: {exc}") from None
+        if r.status_code != 200:
+            raise ToolError(f"cannot list this App's installations (HTTP {r.status_code})")
+        for inst in r.json():
+            if str((inst.get("account") or {}).get("login", "")).lower() == org.lower():
+                return str(inst["id"])
+        raise ToolError(f"the App is not installed on {org}: install it there (all repositories) and press again")
 
     def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str:
         """(c) of the card's checks: do the App's installations reach every repo in

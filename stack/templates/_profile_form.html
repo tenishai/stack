@@ -13,6 +13,14 @@
     <div><label>cbl (for a stack that bootstraps cabal)</label><input type="text" name="cbl" value="{{ p.cbl if p else '' }}" placeholder="~/src/git/stack/cabal/.venv/bin/cbl"></div>
   </div>
   <div class="row">
+    <div><label>GitHub organization ({org})</label><input type="text" name="org" value="{{ p.org if p else '' }}" placeholder="acme"></div>
+    <div><label>GCP project ({project})</label><input type="text" name="gcp_project" value="{{ p.gcp_project if p else '' }}" placeholder="acme-agents"></div>
+  </div>
+  <div class="row">
+    <div><label>Region ({region})</label><input type="text" name="region" value="{{ p.region if p else '' }}" placeholder="us-central1"></div>
+    <div><label>Cluster ({cluster}; also its name in Gojira)</label><input type="text" name="cluster" value="{{ p.cluster if p else '' }}" placeholder="gojira-sandbox"></div>
+  </div>
+  <div class="row">
     <label>Gojira env file (the install's gojira.env; used by the install flow)</label>
     <input type="text" name="env_file" value="{{ p.env_file if p else '' }}" placeholder="~/gojira-agents-prod.env">
   </div>
