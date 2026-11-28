@@ -50,6 +50,11 @@ def check_files(stack: Stack, target: Target) -> list[Check]:
         for label, path in named:
             if path.exists():
                 out.append(Check(f"{app.name}: {label}", "ok"))
+            elif label.startswith(("file:", "template:")):
+                # Criterion 5: a source file nobody has put there yet pauses the run for
+                # a person; it is not a stop, and Check says so the same way.
+                out.append(Check(f"{app.name}: {label}", "warn",
+                                 f"not there yet: {path}; Install pauses for it and continues when it appears"))
             else:
                 out.append(Check(f"{app.name}: {label}", "fail", f"no such file: {path}"))
         # The upstream's own files (cluster objects, k8s/base) come from a clone under

@@ -42,7 +42,7 @@ apps:
     checks = check_files(stack, target)
     assert _by(checks, "cabal: file:ident.toml").status == "ok"
     missing = _by(checks, "cabal: file:~/nowhere/app.pem")
-    assert missing.status == "fail" and "no such file" in missing.detail and "app.pem" in missing.detail
+    assert missing.status == "warn" and "pauses" in missing.detail and "app.pem" in missing.detail   # criterion 5
     assert _by(checks, "kobo: k8s/cluster/rbac.yaml").status == "ok"
     assert _by(checks, "kobo: es.yaml").status == "ok"
     assert _by(checks, "kobo: missing-es.yaml").status == "fail"

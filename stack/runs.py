@@ -60,9 +60,19 @@ def open_gojira(stack: Stack, target: Target, say: Callable[[str], None] = print
 
 
 def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bool = False,
-            yes: bool = False, merge_pins: bool = False, say: Callable[[str], None] = print) -> Report:
+            yes: bool = False, merge_pins: bool = False, say: Callable[[str], None] = print,
+            on_pause: Callable[[Path, str], threading.Event | None] | None = None,
+            on_resume: Callable[[], None] | None = None) -> Report:
     """`stack install` or `stack upgrade` on `target`. Raises ToolError with
-    the sentence to show; never prints a traceback."""
+    the sentence to show; never prints a traceback. `on_pause(path, why)` is
+    told when the run waits for a file a person must put there (criterion 5)
+    and may answer an Event that cuts the wait short; `on_resume()` when the
+    file is there. The CLI passes neither and the run polls."""
+    def _no_pause(path: Path, why: str) -> threading.Event | None:
+        return None
+
+    pause_cb: Callable[[Path, str], threading.Event | None] = on_pause or _no_pause
+    resume_cb: Callable[[], None] = on_resume or (lambda: None)
     stack = Stack.load(target.stack_file)
     try:
         kubectl, gojira = open_gojira(stack, target, say)
@@ -74,7 +84,7 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
         if action == "upgrade":
             clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), crane=CraneCLI(env))
             opts = Options(stack_dir=target.stack_file.parent, repo_root=target.stack_file.parent,
-                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say)
+                           merge_setup_prs=merge_setup_prs, yes=yes, merge_pins=merge_pins, say=say, on_pause=pause_cb, on_resume=resume_cb)
             return Installer(stack, clients, opts).upgrade(apps)
         if action != "install":
             raise ToolError(f"no such action {action!r}")
@@ -90,7 +100,7 @@ def perform(target: Target, action: str, apps: list[str], *, merge_setup_prs: bo
                            forward=lambda: kubectl.port_forward(ns, svc, port, 80), env=env)
         clients = Clients(gojira=gojira, kubectl=kubectl, github=GhCLI(env), cabal=cabal)
         opts = Options(stack_dir=target.stack_file.parent, repo_root=target.repo_root,
-                       merge_setup_prs=merge_setup_prs, say=say)
+                       merge_setup_prs=merge_setup_prs, say=say, on_pause=pause_cb, on_resume=resume_cb)
         return Installer(stack, clients, opts).install(apps)
     finally:
         gojira.close()
@@ -160,6 +170,16 @@ class Line:
 
 
 @dataclass
+class Pause:
+    """Slice 5 (criterion 5): the run is waiting for a person to put a file where
+    the stack file names it. The page shows the path and what the file is for,
+    never its contents; Done sets the event and the engine looks again at once."""
+    path: str
+    why: str
+    event: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
 class Run:
     id: int
     profile: str
@@ -169,10 +189,13 @@ class Run:
     finished: float | None = None
     ok: bool | None = None
     lines: list[Line] = field(default_factory=list)
+    paused: Pause | None = None
 
     @property
     def status(self) -> str:
-        return "running" if self.finished is None else ("done" if self.ok else "failed")
+        if self.finished is None:
+            return "paused" if self.paused is not None else "running"
+        return "done" if self.ok else "failed"
 
     def add(self, level: str, text: str) -> None:
         assert level in LEVELS

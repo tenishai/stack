@@ -28,7 +28,7 @@ def _wait(run, seconds=10):
 def site(tmp_path):
     calls = []
 
-    def perform(target, action, apps, *, merge_setup_prs=False, yes=False, merge_pins=False, say=print):
+    def perform(target, action, apps, *, merge_setup_prs=False, yes=False, merge_pins=False, say=print, **_):
         calls.append((target, action, apps, merge_setup_prs, yes, merge_pins))
         say("== litellm")
         say("  litellm: connected (app 1)")
@@ -217,3 +217,46 @@ def test_pick_a_release_pins_it_in_the_stack_file_and_runs_that_app(tmp_path):
     assert calls == [("upgrade", ["kobo"], True, True, True)]
     run_page = site.get("/runs/2").text
     assert "stack file now pins r/agent-images/kobo:v2.0@sha256:bbbb" in run_page and "upgrade · kobo to v2.0" in site.get("/p/t").text
+
+
+def test_a_missing_file_is_a_pause_card_and_done_resumes(tmp_path):
+    """Criterion 5: the engine says a file is missing (on_pause); the run page shows
+    a card with the path and what it is for, the status is paused, and the file's
+    contents never appear. Done sets the event; the engine continues; the card is
+    gone and the run is done. At fa944a6 perform had no on_pause and Run no pause."""
+    body = "SECRET-FILE-BODY-9C1E"
+    pem = tmp_path / "app.pem"
+    got = {}
+
+    def perform(target, action, apps, *, say=print, on_pause=None, on_resume=None, **_):
+        say("== kobo")
+        ev = on_pause(pem, "kobo: secret kobo-github/private-key.pem")
+        got["event"] = ev
+        ev.wait(5)                              # Done, or the test's deadline
+        assert pem.read_text() == body          # read only after it is there
+        on_resume()
+        say("  kobo: secret kobo-github created (private-key.pem)")
+        return Report(done=["kobo: secret"])
+
+    runner = Runner()
+    site = TestClient(make_app(tmp_path / "p.yaml", runner, perform=perform, preflight=lambda s, t: []))
+    site.post("/profiles", data={"name": "dogfood", "stack_file": str(DOGFOOD)})
+    site.post("/p/dogfood/install", data={"apps": ["kobo"]}, follow_redirects=False)
+    run = runner.runs[1]
+    for _ in range(200):
+        if run.paused is not None:
+            break
+        time.sleep(0.01)
+    assert run.status == "paused"
+    page = site.get("/runs/1").text
+    assert "waiting for a file" in page and str(pem) in page and "kobo-github/private-key.pem" in page
+    assert "b-paused" in page and 'action="/runs/1/resume"' in page
+    assert "hx-trigger" in page                      # a paused run keeps polling
+    pem.write_text(body)
+    r = site.post("/runs/1/resume", follow_redirects=False)
+    assert r.status_code == 303
+    _wait(run)
+    assert run.status == "done" and run.paused is None
+    page = site.get("/runs/1").text
+    assert "waiting for a file" not in page and body not in page
+    assert "kobo: secret kobo-github created" in page

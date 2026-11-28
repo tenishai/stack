@@ -3,15 +3,25 @@
    badge rides along out of band, so it clears when the run does. #}
 {% if oob %}<span id="going" hx-swap-oob="true">{% if runner.active() %}<span class="badge b-running">run #{{ runner.active().id }} going</span>{% endif %}</span>
 <span id="run-status" class="badge b-{{ run.status }}" hx-swap-oob="true">{{ run.status }}</span>{% endif %}
-<section id="lines" class="stage rail-{{ 'main' if run.status == 'running' else ('ok' if run.status == 'done' else 'fail') }}"
-     {% if run.status == 'running' %}hx-get="/runs/{{ run.id }}/lines" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<section id="lines" class="stage rail-{{ 'main' if run.finished is none else ('ok' if run.status == 'done' else 'fail') }}"
+     {% if run.finished is none %}hx-get="/runs/{{ run.id }}/lines" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <div class="stage-head">
     <div class="stage-meta">
       <h2 class="stage-title">Lines <span class="badge b-{{ run.status }}">{{ run.status }}</span>
-        {% if run.status == 'running' %}<span class="muted" style="font-weight:400;font-size:13px">{{ run.lines | length }} so far</span>{% endif %}</h2>
+        {% if run.finished is none %}<span class="muted" style="font-weight:400;font-size:13px">{{ run.lines | length }} so far</span>{% endif %}</h2>
     </div>
   </div>
   <div class="stage-body">
+  {% if run.paused %}
+  {# Criterion 5: a file the stack file names is not there. The card names the path and
+     what it is for and never shows its contents; Done makes the engine look at once. #}
+  <div class="card pause-card">
+    <p style="margin:0 0 6px"><span class="badge b-paused">waiting for a file</span></p>
+    <p style="margin:0 0 4px"><span class="mono">{{ run.paused.path }}</span></p>
+    <p class="muted" style="margin:0 0 10px">for {{ run.paused.why }}. Put the file there (its contents never reach this page) and press Done; the run looks again every few seconds anyway.</p>
+    <form method="post" action="/runs/{{ run.id }}/resume"><button type="submit">Done, it is there</button></form>
+  </div>
+  {% endif %}
   {% for l in run.lines %}
   <div class="line {{ l.level }}"><span class="text">{{ l.text }}</span></div>
   {% else %}
