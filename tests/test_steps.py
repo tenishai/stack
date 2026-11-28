@@ -590,3 +590,38 @@ def test_a_file_that_never_appears_stops_naming_it(home):
     with pytest.raises(ToolError, match=r"never\.pem still missing after 0s"):
         _run(home, stack, gojira=gojira, kubectl=FakeKubectl(ready={"kobo": (1, 1)}),
              github=FakeGitHub(runs={"o/kobo": ("completed", "success")}), file_wait_seconds=0.2)
+
+
+def test_a_template_takes_the_four_and_the_app_from_the_env_file(home):
+    """A `template:` file carries {org} {project} {region} {cluster} beside
+    {gojira_token}; {app_id} and {installation_id} are read only when named: the
+    id from the run's env file, the installation from GitHub with the App's own
+    key, on the profile's org. Fails at ae032c8 (only {gojira_token} was filled)."""
+    (home / "kobo.tmpl").write_text(
+        'github_org: "{org}"\norg_repo: "{org}/kobo-config"\ngcp_project: "{project}"\n'
+        'gojira_token: "{gojira_token}"\ngithub_app_id: "{app_id}"\ngithub_app_installation_id: "{installation_id}"\n')
+    env_file = home / "gojira.env"
+    env_file.write_text("PROJECT=my-proj\nGOJIRA_GITHUB_APP_ID=5141957\nGOJIRA_GITHUB_APP_PEM=/keys/app.pem\n")
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-config": {"config.yaml": f"template:{home}/kobo.tmpl"}}}])
+    kubectl, github = FakeKubectl(), FakeGitHub()
+    github.installations = {"myorg": "77"}
+    _run(home, stack, kubectl=kubectl, github=github, merge_setup_prs=True,
+         values={"org": "myorg", "project": "my-proj", "region": "us-central1", "cluster": "gojira-sandbox"},
+         env_file=env_file)
+    doc = yaml.safe_load(kubectl.secrets[("kobo", "kobo-config")]["config.yaml"])
+    assert doc == {"github_org": "myorg", "org_repo": "myorg/kobo-config", "gcp_project": "my-proj",
+                   "gojira_token": "tok-123", "github_app_id": "5141957", "github_app_installation_id": "77"}
+    assert "installation_id:5141957:myorg" in github.calls
+
+
+def test_a_template_naming_the_app_without_an_env_file_stops_with_the_reason(home):
+    (home / "kobo.tmpl").write_text('github_app_id: "{app_id}"\n')
+    stack = _stack(home, [{"name": "kobo", "repo": "o/kobo",
+                           "secrets": {"kobo-config": {"config.yaml": f"template:{home}/kobo.tmpl"}}}])
+    with pytest.raises(ToolError, match="no env file"):
+        _run(home, stack, merge_setup_prs=True)
+    # and a token the profile never set is named, not written as "{org}"
+    (home / "kobo.tmpl").write_text('github_org: "{org}"\n')
+    with pytest.raises(ToolError, match=r"needs values for \{org\}"):
+        _run(home, stack, merge_setup_prs=True)

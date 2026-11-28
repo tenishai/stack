@@ -8,6 +8,20 @@ releases yet; everything is under Unreleased.
 
 ### Added
 
+- **The page asks four things.** A stranger's stack file is no longer copied and edited:
+  `examples/stack.yaml` and the kobo template carry `{org}`, `{project}`, `{region}` and
+  `{cluster}`, and the profile fills them (`--set name=value` on the command line). The
+  profile page shows one card for the four until Gojira is installed; one press saves them
+  and writes the install's `gojira.env` from them and from the stack file: project, region
+  and cluster; `GOJIRA_GRANTABLE_ROLES` as the union of the roles the apps' contracts ask
+  for (read from the upstreams on GitHub, the stack file's `contract:` over them);
+  `GOJIRA_GRANTABLE_CLUSTER_ROLES` the same; `GOJIRA_ENVIRONMENT_CLUSTERS`; terraform on.
+  A file not there yet starts from the Gojira checkout's `gojira.env.example`, so every knob
+  keeps its doc; a rewrite keeps what the App card wrote. The card reads the file back, never
+  a form's memory. A `template:` file is filled with the same four, plus `{app_id}` from the
+  env file and `{installation_id}` read from GitHub with the App's key, so kobo's config
+  template has nothing to type into either. `stack env` is the command-line verb for the
+  write.
 - **Runs outlive the page.** Every run is a file under `runs/` beside the profiles file,
   written as it goes; a restarted `stack ui` lists every run with its lines and how it
   ended. A run the UI stopped under shows as failed with one line saying to press again.

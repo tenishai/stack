@@ -7,6 +7,7 @@
   <div class="status-strip"><div><span class="k">Stack file</span><span class="v mono">{{ profile.stack_file }}</span></div></div>
 </div>
 <div class="card"><p class="err">{{ error }}</p></div>
+{% if show_values %}{% include "_values_card.html" %}{% endif %}
 {% else %}
   {# The strip reads the stack file, so it lives behind the parse guard. #}
   <div class="status-strip">
@@ -41,6 +42,7 @@
     {% else %}
     <p class="muted" style="margin:0">Not checked since stack ui started.</p>
     {% endif %}
+    {% if show_values %}{% include "_values_card.html" %}{% endif %}
     {% if show_card %}
     {# Slice 4 (criterion 3): the GitHub App is a pause card. It stands in for the
        Gojira row + the Install Gojira button: nothing is installed until the App

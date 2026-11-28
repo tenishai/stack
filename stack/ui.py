@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from stack import envfile as _envfile
 from stack import preflight as _preflight
 from stack import runs as _runs
+from stack import site as _site
 from stack.clients import CraneCLI, GcloudCLI, GhCLI, KubectlCLI, ToolError, tool_env
 from stack.model import Stack
 from stack.profiles import Profile, Profiles
@@ -53,10 +54,12 @@ def _example_path(profile) -> Path | None:
     operator has elsewhere is not guessed at."""
     base = Path(profile.repos).expanduser() if profile.repos else None
     guesses = []
+    if getattr(profile, "gojira_repo", ""):
+        guesses.append(Path(profile.gojira_repo).expanduser() / "gojira.env.example")
     if base is not None:
         stack = None
         try:
-            stack = Stack.load(Path(profile.stack_file).expanduser())
+            stack = Stack.load(Path(profile.stack_file).expanduser(), profile.values())
         except Exception:
             stack = None
         if stack is not None:
@@ -65,6 +68,7 @@ def _example_path(profile) -> Path | None:
                     guesses.append(base / app.repo.split("/")[-1] / "gojira.env.example")
                     break
         guesses.append(base / "gojira" / "gojira.env.example")
+    guesses.append(Path(__file__).parent.parent.parent / "gojira" / "gojira.env.example")   # a checkout beside this one
     for g in guesses:
         if g.exists():
             return g
@@ -103,6 +107,23 @@ def _app_identity_of(profile: Profile) -> tuple[str, str]:
     except Exception:
         return ("", "")
     return (vals.get("GOJIRA_GITHUB_APP_ID", ""), vals.get("GOJIRA_GITHUB_APP_PEM", ""))
+
+
+def _derived_in_env(profile: Profile) -> dict[str, str]:
+    """What the install's env file holds for the knobs the values card writes,
+    "" for each not set or when there is no file: the card shows the file's
+    truth, not the last press."""
+    empty = {k: "" for k in _site.DERIVED_KEYS}
+    if not profile.env_file:
+        return empty
+    p = Path(profile.env_file).expanduser()
+    if not p.exists():
+        return empty
+    try:
+        text = p.read_text()
+    except OSError:
+        return empty
+    return {k: _envfile.get(text, k) for k in _site.DERIVED_KEYS}
 
 
 def _app_usable(app_id: str, app_pem: str) -> bool:
@@ -178,7 +199,7 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
 
     def stack_or_error(profile: Profile) -> tuple[Stack | None, str]:
         try:
-            return Stack.load(profile.target().stack_file), ""
+            return Stack.load(profile.target().stack_file, profile.values()), ""
         except Exception as exc:  # yaml / pydantic / missing file: one sentence
             return None, f"{profile.stack_file}: {str(exc).splitlines()[0]}"
 
@@ -197,11 +218,14 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
     @app.post("/profiles")
     def save_profile(request: Request, name: str = Form(), stack_file: str = Form(),
                      kubeconfig: str = Form(""), cloud_account: str = Form(""), repos: str = Form(""),
-                     cbl: str = Form(""), env_file: str = Form(""), gojira_repo: str = Form("")):
+                     cbl: str = Form(""), env_file: str = Form(""), gojira_repo: str = Form(""),
+                     org: str = Form(""), gcp_project: str = Form(""), region: str = Form(""), cluster: str = Form("")):
         try:
             profile = Profile(name=name.strip(), stack_file=stack_file.strip(), kubeconfig=kubeconfig.strip(),
                               cloud_account=cloud_account.strip(), repos=repos.strip(), cbl=cbl.strip(),
-                              env_file=env_file.strip(), gojira_repo=gojira_repo.strip())
+                              env_file=env_file.strip(), gojira_repo=gojira_repo.strip(),
+                              org=org.strip(), gcp_project=gcp_project.strip(), region=region.strip(),
+                              cluster=cluster.strip())
         except ValueError as exc:
             return page("index.html", request, rows=index_rows(), error=str(exc).splitlines()[0], status_code=422)
         book = Profiles.load(profiles_path)
@@ -272,11 +296,61 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
         orgs = {a.repo.split("/")[0] for a in stack.apps} if stack is not None else set()
         stack_org = next(iter(orgs)) if len(orgs) == 1 else (next(iter(orgs)) if orgs else "")
         app_setup = _app_setup_doc(profile)
+        # The four things (stack.site): shown as a card until Gojira is installed —
+        # the env file Gojira installs from is written from them, so they come
+        # first. The card reads back what the env file holds (never what a form
+        # remembered): a missing file or knob shows as missing.
+        show_values = gojira_state != "installed"
+        env_has = _derived_in_env(profile)
         return page("profile.html", request, profile=profile, stack=stack, error=error, env=environment(stack),
                     runs=list(reversed(runs)), last_check=last_check, check_level=level_of(last_check),
                     busy=runner.active(), gojira_state=gojira_state, gojira_version=gojira_version,
                     gojira_note=gojira_note, show_card=show_card, app_id=app_id, app_pem=app_pem,
-                    stack_org=stack_org, app_setup=app_setup)
+                    stack_org=stack_org, app_setup=app_setup, show_values=show_values,
+                    values=profile.values(), values_complete=profile.values_complete(), env_has=env_has,
+                    tokens=_site.TOKENS)
+
+    @app.post("/p/{name}/values")
+    async def save_values(name: str, request: Request):
+        """The four things, one press: saved on the profile (they fill the stack
+        file's tokens from now on) and written into the install's env file with
+        what follows from them — the roles the apps ask for, read from their
+        contracts on GitHub; the cluster each environment means; terraform on.
+        A file not there yet starts from the Gojira checkout's gojira.env.example.
+        Nothing touches a cluster."""
+        profile = load_profile(name)
+        if profile is None:
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
+        form = await request.form()
+        fields = {k: str(form.get(k) or "").strip() for k in ("org", "gcp_project", "region", "cluster")}
+        if not all(fields.values()):
+            return notice(request, 422, "all four are needed: the GitHub organization, the GCP project, the region "
+                                        "and the cluster name", level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        profile = profile.model_copy(update=fields)
+        book = Profiles.load(profiles_path)
+        book.put(profile)
+        book.save(profiles_path)
+        if not profile.env_file:
+            return notice(request, 422, "saved on the profile; set the env file on the profile (Profile settings) and "
+                                        "press again to write it", level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        stack, error = stack_or_error(profile)
+        if stack is None:
+            return notice(request, 422, f"saved on the profile, but the stack file does not read with them: {error}",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        example = _example_path(profile)
+        env_path = Path(profile.env_file).expanduser()
+        if not env_path.exists() and example is None:
+            return notice(request, 422, f"{env_path} does not exist yet and no gojira.env.example was found to start "
+                                        "it from: set the profile's Gojira checkout (Profile settings)",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        try:
+            derived = _site.env_values(stack, profile.values(), github(env=profile.target().env),
+                                       repo_root=profile.target().repo_root)
+            _site.write_env(env_path, derived, example.read_text() if example is not None else "")
+        except ToolError as exc:
+            return notice(request, 422, f"saved on the profile, but the env file was not written: {exc}",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        return RedirectResponse(f"/p/{name}", status_code=303)
 
     @app.post("/p/{name}/check")
     def check(name: str, request: Request):

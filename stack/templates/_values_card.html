@@ -1,0 +1,33 @@
+{# The four things (stack.site): one card, shown until Gojira is installed, on both sides of the
+   stack-file parse guard — a stranger's file does not read until the four are given. #}
+    {# The four things (stack.site). Shown until Gojira is installed: the env file
+       Gojira installs from is written from them, so they come before the App and
+       before Install Gojira. The right column reads the env FILE back. #}
+    <div class="card values-card">
+      <p style="margin:0 0 8px"><strong>Four things</strong> this install is told. They fill the stack file's
+        <span class="mono">{org} {project} {region} {cluster}</span> and write the install's env file:
+        project, region and cluster; the roles the apps ask for (read from their contracts); the cluster each
+        environment means; terraform makes the cluster. Nothing here is secret and nothing touches a cluster.</p>
+      <form method="post" action="/p/{{ profile.name }}/values" class="app-fields">
+        <div class="knob"><label>GitHub organization</label>
+          <input type="text" name="org" value="{{ values.org or '' }}" placeholder="the org the deploy repos, kobo's config repo and the agents live in"></div>
+        <div class="knob"><label>GCP project</label>
+          <input type="text" name="gcp_project" value="{{ values.project or '' }}" placeholder="a project you own, billing on"></div>
+        <div class="knob"><label>Region</label>
+          <input type="text" name="region" value="{{ values.region or 'us-central1' }}"></div>
+        <div class="knob"><label>Cluster</label>
+          <input type="text" name="cluster" value="{{ values.cluster or 'gojira-sandbox' }}" placeholder="the GKE cluster terraform makes; also its name in Gojira"></div>
+        <div class="env-foot">
+          <button type="submit" class="caution" {% if busy %}disabled{% endif %}>Save and write the env file</button>
+          <span class="muted">{% if profile.env_file %}writes <span class="mono">{{ profile.env_file }}</span>{% else %}set the profile's env file (Profile settings) first{% endif %}</span>
+        </div>
+      </form>
+      <table class="boxed env-derived" style="margin-top:12px">
+        <thead><tr><th>In the env file now</th><th>Value</th></tr></thead>
+        <tbody>
+        {% for k, v in env_has.items() %}
+          <tr><td class="mono">{{ k }}</td><td class="mono">{% if v %}{{ v }}{% else %}<span class="muted">not written yet</span>{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>

@@ -77,13 +77,14 @@ def test_names_are_dns_labels_and_unique():
 
 
 def test_the_stranger_example_is_the_whole_stack_from_released_images():
-    s = Stack.load(ROOT / "examples" / "stack.yaml")
+    four = {"org": "myorg", "project": "my-proj", "region": "us-central1", "cluster": "gojira-sandbox"}
+    s = Stack.load(ROOT / "examples" / "stack.yaml", four)
     assert [a.name for a in s.apps] == ["litellm", "cabal", "liminal", "kobo"]
     for app in s.apps:
         # a release, pinned: a tag moves, a digest does not
         assert app.image.startswith("ghcr.io/tenishai/"), app.name
         assert "@sha256:" in app.image, f"{app.name}: image is not pinned by digest"
-        assert app.deploy_repo == f"acme/infra-{app.name}-deploy"
+        assert app.deploy_repo == f"myorg/infra-{app.name}-deploy"
         assert app.source_image == app.image.split(":")[0]
     liminal = s.apps[2]
     tok = liminal.secrets["liminal-secrets"]["LIMINAL_CABAL_TOKEN"]

@@ -1,12 +1,14 @@
 # The tenish stack from published images, on a project of yours.
 #
-# Copy this file, replace `acme` with your GitHub organization and `acme-agents`
-# with your GCP project, and read docs/install.md: it goes from an empty project to
-# the room in order. Nothing here is built. Every app is a release image on ghcr,
-# pinned by digest; each gets a small deploy repo of yours (gojira.yaml + the
-# upstream's k8s/base) that the installer creates and Gojira connects. Nothing
-# secret is in this file: the keys are generated into .generated/ (mode 600,
-# gitignored) and the one file you bring is your GitHub App's private key.
+# Nothing in this file is edited. It carries four tokens — {org} (your GitHub
+# organization), {project} (your GCP project), {region} and {cluster} — and the
+# profile in `stack ui` fills them (the command line: --set org=… and so on).
+# Read docs/install.md: it goes from an empty project to the room in order.
+# Nothing here is built. Every app is a release image on ghcr, pinned by digest;
+# each gets a small deploy repo of yours (gojira.yaml + the upstream's k8s/base)
+# that the installer creates and Gojira connects. Nothing secret is in this file:
+# the keys are generated into .generated/ (mode 600, gitignored) and the one file
+# you bring is your GitHub App's private key.
 #
 # Order is the dependency order: litellm (the model proxy), cabal (the switchboard,
 # needs litellm's key), liminal (the tool gateway, holds a token minted on that
@@ -16,12 +18,12 @@ gojira:
   namespace: gojira
   # Pin the context: your current kubectl context can be any cluster. This is the
   # name `gcloud container clusters get-credentials` writes for the cluster below.
-  kube_context: gke_acme-agents_us-central1_gojira-sandbox
+  kube_context: gke_{project}_{region}_{cluster}
 
 cluster:
-  name: gojira-sandbox         # the name you registered the cluster under in Gojira (install.md step 1)
-  gcp_project: acme-agents
-  location: us-central1
+  name: "{cluster}"            # also the name the cluster is registered under in Gojira (install.md step 1)
+  gcp_project: "{project}"
+  location: "{region}"
 
 apps:
   - name: litellm
@@ -30,11 +32,11 @@ apps:
     # (github.com/tenishai/<repo>/releases); a tag moves, a digest does not.
     image: ghcr.io/tenishai/litellm-deploy:v0.1.0@sha256:797150bba8bd7aa00676cf5dcf14cfaa9dd56ecedcf46a9721d5b0f35d477ee4
     source_image: ghcr.io/tenishai/litellm-deploy   # where releases are published; the UI's release picker reads it
-    deploy_repo: acme/infra-litellm-deploy          # created if missing; gojira.yaml + k8s/base, nothing else
+    deploy_repo: "{org}/infra-litellm-deploy"       # created if missing; gojira.yaml + k8s/base, nothing else
     workload_class: web
     contract:
       identity: { gcp_roles: [roles/aiplatform.user] }   # the proxy calls Vertex as its own account
-      env: { VERTEX_PROJECT: acme-agents, VERTEX_LOCATION: us-central1 }
+      env: { VERTEX_PROJECT: "{project}", VERTEX_LOCATION: "{region}" }
     secrets:
       litellm-secrets:
         LITELLM_MASTER_KEY: generate:32:litellm-master-key   # one value, shared with cabal below
@@ -43,7 +45,7 @@ apps:
     repo: tenishai/cabal
     image: ghcr.io/tenishai/cabal:v0.5.2@sha256:2e5baea1d11ff7ab61802b1f0b636d10d7ebcf01d724575046ac010c4cec78eb   # 0.5.2 carries liminal's client; the [liminal] block in cabal-identity.toml needs it
     source_image: ghcr.io/tenishai/cabal
-    deploy_repo: acme/infra-cabal-deploy
+    deploy_repo: "{org}/infra-cabal-deploy"
     bootstrap: cabal           # catch the bootstrap code from its log, log in, mint the tokens below
     configmaps:
       cabal-config:
@@ -57,7 +59,7 @@ apps:
     repo: tenishai/liminal
     image: ghcr.io/tenishai/liminal:v0.12.0@sha256:0ddd7a925e66522ad2837e030e5e3aa61f7f300830c0decbc1985ea906c8b917
     source_image: ghcr.io/tenishai/liminal
-    deploy_repo: acme/infra-liminal-deploy
+    deploy_repo: "{org}/infra-liminal-deploy"
     secrets:
       liminal-secrets:
         LIMINAL_CABAL_TOKEN: cabal-token:service:liminal:secrets-fetch   # the gateway fetches vendor credentials from cabal with it
@@ -66,13 +68,13 @@ apps:
     repo: tenishai/kobo
     image: ghcr.io/tenishai/kobo:v0.3.86@sha256:e8068497ae55cb816beb4aa8ab6f350f45c72454c8ca3043462ba90f43de6908
     source_image: ghcr.io/tenishai/kobo
-    deploy_repo: acme/infra-kobo-deploy
+    deploy_repo: "{org}/infra-kobo-deploy"
     cluster_objects: [k8s/cluster/rbac.yaml]     # the ClusterRole kobo-room, which Gojira binds via cluster_roles
     contract:
       # The room makes agents: it creates their service accounts and grants them
       # roles, pushes their images, deploys through Gojira and keeps catalogs in
       # buckets. Each role must be on the install's GOJIRA_GRANTABLE_ROLES
-      # (install.md step 1); Gojira creates the account kobo@acme-agents with them.
+      # (install.md step 1); Gojira creates the account kobo@{project} with them.
       identity:
         gcp_roles:
           - roles/aiplatform.user

@@ -87,3 +87,22 @@ def test_install_refuses_a_context_without_gojira_before_touching_anything(tmp_p
     recorded = calls.read_text()
     assert "--request-timeout=20s get ns gojira" in recorded
     assert "port-forward" not in recorded and "get secret" not in recorded
+
+
+def test_check_names_the_tokens_a_stranger_file_needs_and_set_fills_them():
+    """examples/stack.yaml carries {org} {project} {region} {cluster}: without
+    values `check` says which (exit 2, one sentence); with --set it reads."""
+    env = {**os.environ}
+    env.pop("PYTHONPATH", None)
+    done = subprocess.run([sys.executable, "-m", "stack.cli", "check", str(ROOT / "examples" / "stack.yaml")],
+                          capture_output=True, text=True, env=env, cwd=ROOT)
+    assert done.returncode == 2
+    assert "needs values for {org}, {project}, {region}, {cluster}" in done.stderr and "Traceback" not in done.stderr
+    done = subprocess.run([sys.executable, "-m", "stack.cli", "check", str(ROOT / "examples" / "stack.yaml"),
+                           "--set", "org=myorg", "--set", "project=my-proj", "--set", "region=us-central1",
+                           "--set", "cluster=gojira-sandbox"], capture_output=True, text=True, env=env, cwd=ROOT)
+    assert done.returncode == 0, done.stderr
+    assert "4 apps, in order: litellm, cabal, liminal, kobo" in done.stdout
+    done = subprocess.run([sys.executable, "-m", "stack.cli", "check", str(ROOT / "examples" / "stack.yaml"),
+                           "--set", "org"], capture_output=True, text=True, env=env, cwd=ROOT)
+    assert done.returncode == 2 and "NAME=VALUE" in done.stderr

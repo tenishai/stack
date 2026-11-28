@@ -16,7 +16,7 @@ every app from a published image, each with a small deploy repo of yours.
 | liminal | the tool gateway: agents reach vendors (GitHub, Datadog, the web) through it, with credentials cabal holds | `ghcr.io/tenishai/liminal` |
 | kobo | the room: a web UI where people make and talk to agents | `ghcr.io/tenishai/kobo` |
 
-Each app gets a repo of yours, `acme/infra-<app>-deploy`, holding only a
+Each app gets a repo of yours, `<org>/infra-<app>-deploy`, holding only a
 `gojira.yaml` and the upstream's `k8s/base`. The installer writes it, Gojira
 connects it, and its CI copies the published image into your project's own
 registry and applies the manifests. Nothing is built.
@@ -28,95 +28,96 @@ registry and applies the manifests. Nothing is built.
 | A GCP project with billing, and Owner on it | A throwaway. Gojira's identity gets broad IAM in it, and so does the room's. Fine for a sandbox and nowhere else. |
 | A GitHub organization you administer | The deploy repos, kobo's config repo and every agent repo are created there. |
 | `gcloud`, `kubectl`, `gh`, `terraform`, `uv`, `crane` | `gcloud components install gke-gcloud-auth-plugin` too. `crane` copies images (`brew install crane`). No Docker. |
-| `gh` logged in | `gh auth login`; the account must be able to create repos in the org. |
+| `gcloud` and `gh` logged in | `gcloud auth login` as the project's owner; `gh auth login` as an account that can create repos in the org. |
 | cabal's `cbl` | The switchboard's CLI, from a checkout of tenishai/cabal: `uv venv .venv && uv sync` there, then `.venv/bin/cbl`. The installer logs in to cabal with it once and mints the tokens the other apps hold. |
 | About an hour | Gojira's install is sixteen minutes of it; the rest is reading. |
 
 > More than one Google account on this machine? `kubectl` caches its token per
-> cluster, not per account. Give this install its own kubeconfig:
-> `export KUBECONFIG=~/.kube-acme/config`, and keep it for every command here.
+> cluster, not per account. Give this install its own kubeconfig
+> (`~/.kube-<name>/config`) and name it on the profile below.
 
-## 1. Gojira
-
-Follow Gojira's [install guide](https://github.com/tenishai/gojira/blob/main/docs/install.md)
-steps 1 to 4: the values file, `make install` (terraform makes the cluster), the
-UI through a port-forward, registering the cluster. Three values in its
-`gojira.env` are for this stack:
-
-```bash
-# the roles the room's contract asks for (stack.yaml, kobo: identity.gcp_roles); each
-# role an app may ask for must be here, or Gojira refuses the provision
-GOJIRA_GRANTABLE_ROLES=roles/aiplatform.user,roles/artifactregistry.reader,roles/container.developer,roles/iam.serviceAccountAdmin,roles/resourcemanager.projectIamAdmin,roles/storage.admin
-# the ClusterRole kobo's cluster_objects applies and its contract binds
-GOJIRA_GRANTABLE_CLUSTER_ROLES=kobo-room
-# which cluster each environment name means; the stack file's apps say `dev`
-GOJIRA_ENVIRONMENT_CLUSTERS={dev: gojira-sandbox}
-```
-
-Register the cluster under the name you will put in `stack.yaml` (`cluster.name`).
-You leave this step with Gojira answering on `http://127.0.0.1:8080` through a
-port-forward, one registered cluster, and no apps.
-
-## 2. The GitHub App
-
-Gojira acts on your repos as a GitHub App, and so does the room. One App serves
-both. Create it in your organization following Gojira's
-[github-app-setup.md](https://github.com/tenishai/gojira/blob/main/docs/github-app-setup.md)
-sections 1 to 3, and install it on **all repositories** of the org: the deploy
-repos do not exist yet, kobo's config repo does not either, and every agent the
-room makes is a new repo.
-
-Keep two things: the App's numeric id (`gojira.env` has it already) and its
-private key. Put the key where `stack.yaml` expects it:
-
-```bash
-mkdir -p ~/.config/stack && mv ~/Downloads/<app>.*.private-key.pem ~/.config/stack/github-app.pem
-chmod 600 ~/.config/stack/github-app.pem
-```
-
-The installation id is on the App's installation page (the number at the end of
-`github.com/organizations/acme/settings/installations/<id>`); kobo's template
-wants it in step 3.
-
-## 3. Your copy of the stack file
+## 1. The page
 
 ```bash
 git clone https://github.com/tenishai/stack && cd stack
-uv venv .venv && uv sync --locked
-cp -r examples/stack.yaml examples/stack ./
+uv venv .venv && uv sync --locked --extra ui
+git clone https://github.com/tenishai/gojira ../gojira     # Gojira's own install scripts
+.venv/bin/stack ui
 ```
 
-Edit `stack.yaml`: `acme` → your org, `acme-agents` → your project, the
-`kube_context` and `cluster.name` to what step 1 wrote and registered, and the
-`image:` lines to the digests on each upstream's release page (a tag moves, a
-digest does not). Edit `stack/kobo-config.template.yaml` the same way, and put
-the App id and installation id from step 2 in its last lines. Leave
-`{gojira_token}` as it is: it is filled when the Secret is written. Nothing in
-these files is secret; keep them in a repo of yours if you like.
+`localhost:8097`. Add a profile: a name; the stack file
+`examples/stack.yaml` as it is (nothing in it is edited); the kubeconfig this
+install will use; your Google account (`CLOUDSDK_CORE_ACCOUNT`, when the machine
+has more than one); an env file path for Gojira's values, say
+`~/.config/stack/<name>/gojira.env` (it need not exist); and the Gojira
+checkout, `../gojira`.
+
+## 2. Four things
+
+The profile page opens on one card: your GitHub organization, your GCP project,
+the region and the cluster name. Press **Save and write the env file**. The
+page writes Gojira's values file from them and from the stack file, and shows
+what the file now holds:
+
+| Written | From |
+|---|---|
+| `PROJECT`, `REGION`, `CLUSTER`, `GOJIRA_TERRAFORM=1` | the four; terraform makes the cluster |
+| `GOJIRA_GRANTABLE_ROLES` | every role an app's contract asks for, read from the upstreams' `gojira.yaml` on GitHub with the stack file's `contract:` over them |
+| `GOJIRA_GRANTABLE_CLUSTER_ROLES` | every `cluster_roles` the same way (kobo's `kobo-room`) |
+| `GOJIRA_ENVIRONMENT_CLUSTERS` | each environment the apps name, meaning this cluster |
+
+The other knobs come from Gojira's `gojira.env.example` with their docs, and the
+env form (the link in the strip) edits any of them. The same four fill the stack
+file's `{org}`, `{project}`, `{region}` and `{cluster}` from now on, and the
+kobo template's. From a terminal, `stack env examples/stack.yaml --env-file
+<path> --gojira-repo ../gojira --set org=… --set project=… --set region=… --set
+cluster=…` writes the same file.
+
+## 3. The GitHub App
+
+Gojira acts on your repos as a GitHub App, and so does the room. One App serves
+both. The page shows a card with the link to create it in your organization and
+the exact permissions (read from Gojira's
+[github-app-setup.md](https://github.com/tenishai/gojira/blob/main/docs/github-app-setup.md)).
+Install it on **all repositories** of the org: the deploy repos do not exist
+yet, kobo's config repo does not either, and every agent the room makes is a
+new repo. Download the private key, put it somewhere only you read
+(`chmod 600`), and type the App's id and the key's path on the card. **Done**
+checks the key answers for that id and the installation covers the org, and
+stores only the id and the path in the env file. The installation id is read
+from GitHub when it is needed; nothing to copy.
+
+## 4. Install Gojira
+
+**Install Gojira** runs Gojira's `scripts/install.sh` under the env file as a
+run with its lines live: terraform makes the cluster and Gojira's identity
+(about ten minutes), Cloud Build builds Gojira, the pod comes up, the version
+shows on the page. Pressing again later is how Gojira is upgraded.
+
+## 5. Install the stack
+
+Press **Install** on each app in order: litellm, cabal, liminal, kobo (one press
+for the whole file is the next increment). From a terminal:
 
 ```bash
-.venv/bin/stack check stack.yaml
+.venv/bin/stack install examples/stack.yaml --merge-setup-prs --cbl <path to cbl> \
+    --env-file <the env file> --set org=… --set project=… --set region=… --set cluster=…
 ```
 
-reads both files and names anything missing. It does not touch the cluster.
+What you will see, in order:
 
-## 4. Install
-
-```bash
-.venv/bin/stack install stack.yaml --merge-setup-prs --cbl <path to cbl>
-```
-
-or `stack ui`, which puts the same steps behind buttons on `localhost:8097`
-with the run's lines live. What you will see, in order:
-
-1. The cluster is registered (already, from step 1: "exists").
-2. **litellm**: the deploy repo is created and filled, Gojira connects it and
-   opens a setup PR on it; `--merge-setup-prs` merges it (the press is the
-   review: the repo exists for exactly this content). Its CI copies the image
+1. The cluster is registered under the name you gave (on a second press: "exists").
+2. **litellm**: the deploy repo `<org>/infra-litellm-deploy` is created and filled,
+   Gojira connects it and opens a setup PR on it; the run merges it (the press is
+   the review: the repo exists for exactly this content). Its CI copies the image
    and applies; pods come up.
 3. **cabal**: the same, then the installer catches cabal's one-time bootstrap
-   code from its log, logs in with `cbl`, and mints the token kobo will hold.
-4. **kobo**: the same, with the ClusterRole applied first and three Secrets.
+   code from its log, logs in with `cbl`, and mints the tokens liminal and kobo
+   will hold.
+4. **liminal**: the same, holding its token.
+5. **kobo**: the same, with the ClusterRole applied first and three Secrets; its
+   config comes from the template with the four, the App's id and installation id
+   and Gojira's token filled in.
 
 Rerunning is safe: every step reads before it writes, and a second run says
 "exists" down the list. Two pauses are yours:
@@ -128,7 +129,7 @@ Rerunning is safe: every step reads before it writes, and a second run says
   to make a new service account usable; the installer retries once by itself.
   A second failure stops with the Actions URL.
 
-## 5. The room's org
+## 6. The room's org
 
 kobo keeps an org's catalogs, models and groups in a config repo (`org_repo` in
 the template) and its personas and skills in two buckets. Its bootstrap makes
@@ -138,7 +139,7 @@ all of them, idempotently, with the App's own credentials, from inside the pod:
 kubectl -n kobo exec deploy/kobo -- python -m kobo_api.bootstrap
 ```
 
-It creates `acme/kobo-config` with an `org.yaml`, the two buckets, the skills
+It creates `<org>/kobo-config` with an `org.yaml`, the two buckets, the skills
 repo with its publish workflow, and seeds the default personas. Then restart
 the room so it reads the org config:
 
@@ -146,7 +147,7 @@ the room so it reads the org config:
 kubectl -n kobo rollout restart deploy/kobo
 ```
 
-## 6. Open the room
+## 7. Open the room
 
 ```bash
 kubectl -n kobo port-forward svc/kobo 8090:80

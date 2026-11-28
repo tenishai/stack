@@ -155,6 +155,7 @@ class FakeGitHub:
         self.org_denied: dict[str, str] = {}  # org -> why gh cannot see it
         self.refuse_merges = 0                # merge_pr: rule refusals before one succeeds
         self.merge_error: ToolError | None = None
+        self.installations: dict[str, str] = {}   # org -> installation id; empty = installed everywhere as "1"
 
     def login(self):
         if not self.user:
@@ -247,6 +248,15 @@ class FakeGitHub:
         if getattr(self, "identity_fail", None):
             raise ToolError(self.identity_fail)
         return app_id
+
+    def installation_id(self, app_id, pem_path, org):
+        self.calls.append(f"installation_id:{app_id}:{org}")
+        if not self.installations:
+            return "1"
+        try:
+            return self.installations[org.lower()]
+        except KeyError:
+            raise ToolError(f"the App is not installed on {org}: install it there (all repositories) and press again") from None
 
     def installation_covers(self, app_id, pem_path, repos):
         self.calls.append(f"covers:{','.join(repos)}")

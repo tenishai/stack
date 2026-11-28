@@ -4,7 +4,12 @@
     stack install examples/dogfood.yaml --merge-setup-prs   # a first install of repos you own
     stack check examples/dogfood.yaml                  # parse the file, resolve nothing
     stack upgrade examples/dogfood.yaml [app …]        # converge changed image: pins (stack#12)
+    stack env examples/stack.yaml --env-file gojira.env --set org=… --set project=… \
+        --set region=… --set cluster=…                 # write Gojira's values file from the four
     stack ui                                           # the same, behind buttons on localhost
+
+A stack file may carry the tokens {org} {project} {region} {cluster}
+(examples/stack.yaml does): --set fills them, or the profile does in the UI.
 
 Needs on PATH: kubectl (on the install's context), gh (logged in), and for a
 stack with `bootstrap: cabal`, a `cbl` (--cbl, or $STACK_CBL). Repos named
@@ -39,10 +44,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(prog="stack")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("install", "check", "upgrade"):
+    for name in ("install", "check", "upgrade", "env"):
         s = sub.add_parser(name)
         s.add_argument("stack_file")
+        s.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                       help="a value for a token in the stack file: org, project, region, cluster")
+    s = sub.choices["env"]
+    s.add_argument("--env-file", required=True, help="the gojira.env to write (created from the example if absent)")
+    s.add_argument("--gojira-repo", default="", help="a Gojira checkout; its gojira.env.example starts a new file")
     s = sub.choices["install"]
+    s.add_argument("--env-file", default="", help="the install's gojira.env (a template naming the GitHub App reads it)")
     s.add_argument("apps", nargs="*", help="install only these apps (default: every app in the file)")
     s.add_argument("--merge-setup-prs", action="store_true",
                    help="merge every setup PR yourself (a first install of repos you own)")
@@ -75,17 +86,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     path = Path(a.stack_file).expanduser()
+    values: dict[str, str] = {}
+    for item in a.set:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            print(f"--set takes NAME=VALUE, got {item!r}", file=sys.stderr)
+            return 2
+        values[key.strip()] = value.strip()
     try:
-        stack = Stack.load(path)
-    except Exception as exc:  # pydantic / yaml: one sentence, no traceback
+        stack = Stack.load(path, values)
+    except Exception as exc:  # pydantic / yaml / a token without a value: one sentence, no traceback
         print(f"{path}: {str(exc).splitlines()[0]}", file=sys.stderr)
         return 2
     if a.cmd == "check":
         print(f"{path}: {len(stack.apps)} apps, in order: " + ", ".join(x.name for x in stack.apps))
         return 0
+    if a.cmd == "env":
+        return _write_env(stack, values, Path(a.env_file).expanduser(), a.gojira_repo)
 
+    env_file = Path(a.env_file).expanduser() if getattr(a, "env_file", "") else None
     target = Target(stack_file=path, repos=Path(a.repos).expanduser() if getattr(a, "repos", "") else None,
-                    cbl=getattr(a, "cbl", ""), cabal_port=getattr(a, "cabal_port", 17497))
+                    cbl=getattr(a, "cbl", ""), cabal_port=getattr(a, "cabal_port", 17497),
+                    values=values, env_file=env_file)
     try:
         report = perform(target, a.cmd, a.apps, merge_setup_prs=a.merge_setup_prs,
                          yes=getattr(a, "yes", False))
@@ -94,6 +116,34 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"\ndone: {len(report.done)} steps"
           + (f", waited on {len(report.waited_on)} merges" if report.waited_on else ""))
+    return 0
+
+
+def _write_env(stack, values: dict[str, str], env_file: Path, gojira_repo: str) -> int:
+    """`stack env`: Gojira's values file from the four and the stack file (stack.site).
+    Prints the knobs it wrote; none of them is secret."""
+    from stack.clients import GhCLI, ToolError
+    from stack.site import TOKENS, env_values, write_env
+
+    missing = [t for t in TOKENS if not values.get(t)]
+    if missing:
+        print("stack env needs every one of the four: --set " + " --set ".join(f"{t}=…" for t in missing), file=sys.stderr)
+        return 2
+    example = Path(gojira_repo).expanduser() / "gojira.env.example" if gojira_repo else None
+    example_text = example.read_text() if example is not None and example.exists() else ""
+    if not env_file.exists() and not example_text:
+        print(f"{env_file} does not exist yet and no --gojira-repo was given to start it from "
+              "(its gojira.env.example keeps a doc above every knob)", file=sys.stderr)
+        return 2
+    try:
+        derived = env_values(stack, values, GhCLI())
+        write_env(env_file, derived, example_text)
+    except ToolError as exc:
+        print(f"\nstopped: {exc}", file=sys.stderr)
+        return 1
+    print(f"{env_file}:")
+    for k, v in derived.items():
+        print(f"  {k}={v}")
     return 0
 
 
