@@ -1,4 +1,4 @@
-"""The stack file: what it accepts, what it refuses, and the dogfood example."""
+"""The stack file: what it accepts, what it refuses, and the two examples."""
 
 from pathlib import Path
 
@@ -76,8 +76,27 @@ def test_names_are_dns_labels_and_unique():
         Stack.model_validate(doc)
 
 
-def test_the_example_holds_no_secret_values():
-    text = (ROOT / "examples" / "dogfood.yaml").read_text()
+def test_the_stranger_example_is_the_whole_stack_from_released_images():
+    s = Stack.load(ROOT / "examples" / "stack.yaml")
+    assert [a.name for a in s.apps] == ["litellm", "cabal", "liminal", "kobo"]
+    for app in s.apps:
+        # a release, pinned: a tag moves, a digest does not
+        assert app.image.startswith("ghcr.io/tenishai/"), app.name
+        assert "@sha256:" in app.image, f"{app.name}: image is not pinned by digest"
+        assert app.deploy_repo == f"acme/infra-{app.name}-deploy"
+        assert app.source_image == app.image.split(":")[0]
+    liminal = s.apps[2]
+    tok = liminal.secrets["liminal-secrets"]["LIMINAL_CABAL_TOKEN"]
+    assert (tok.cabal_sub, tok.cabal_scope) == ("service:liminal", "secrets-fetch")
+    template = yaml.safe_load((ROOT / "examples" / "stack" / "kobo-config.template.yaml").read_text())
+    assert template["runtime_image"].startswith("ghcr.io/tenishai/daedalus-runtime:v")
+    assert "@sha256:" in template["runtime_image"], "the agents' runtime is not pinned by digest"
+    assert template["liminal_url"] == "http://liminal.liminal.svc.cluster.local"
+
+
+@pytest.mark.parametrize("example", ["dogfood.yaml", "stack.yaml"])
+def test_the_example_holds_no_secret_values(example):
+    text = (ROOT / "examples" / example).read_text()
     for obj in yaml.safe_load(text)["apps"]:
         for keys in list(obj.get("secrets", {}).values()) + list(obj.get("configmaps", {}).values()):
             for value in keys.values():
