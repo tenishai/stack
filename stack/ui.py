@@ -86,6 +86,75 @@ def level_of(run) -> str:
     return {"ok": "ok", "warn": "warn", "fail": "fail"}.get(run.lines[-1].level, "idle")
 
 
+def _app_identity_of(profile: Profile) -> tuple[str, str]:
+    """The GitHub App id + pem path the install's env file carries, or ("", "")
+    when the file is absent, has neither, or is unreadable. Reading the env file
+    here is the same read the install and the env form do; the card only needs
+    whether both are present, never their values (the pem path is shown, the
+    key is not read or echoed)."""
+    if not profile.env_file:
+        return ("", "")
+    p = Path(profile.env_file).expanduser()
+    if not p.exists():
+        return ("", "")
+    try:
+        vals = _envfile.get_all(p.read_text())
+    except Exception:
+        return ("", "")
+    return (vals.get("GOJIRA_GITHUB_APP_ID", ""), vals.get("GOJIRA_GITHUB_APP_PEM", ""))
+
+
+def _app_usable(app_id: str, app_pem: str) -> bool:
+    """Whether the env file's App id + pem is usable enough to gate the install
+    off (criterion 3, "when it shows"). All four are local checks — no network:
+    both present, the pem path exists, and the pem parses as an RSA private key.
+    The key is read only to test it; it is never echoed, logged, or stored
+    (only the path is stored). The network checks — a JWT answering GET /app and
+    the installation's coverage — are Done's job, not the card's: the card stands
+    in for the install until the operator presses Done, and Done runs them."""
+    if not app_id or not app_pem:
+        return False
+    pem = Path(app_pem).expanduser()
+    if not pem.exists():
+        return False
+    try:
+        import jwt
+
+        jwt.encode({"iat": 0, "exp": 1, "iss": app_id}, pem.read_text(), algorithm="RS256")
+    except Exception:
+        return False
+    return True
+
+
+def _app_setup_doc(profile: Profile) -> dict:
+    """The GitHub App settings, read from the checkout's docs/github-app-setup.md
+    at render time (criterion 3: the table has changed twice this month, so the
+    card renders the doc's current table, never a copy in our tree). Returns the
+    permission rows, the install steps, and whether the doc was found; a missing
+    doc or checkout gets one sentence naming the profile field (the refusals' way).
+    The checkout is profile.gojira_repo, else the gojira clone under the repos dir."""
+    import re
+    candidates = []
+    if profile.gojira_repo:
+        candidates.append(Path(profile.gojira_repo).expanduser() / "docs" / "github-app-setup.md")
+    if profile.repos:
+        candidates.append(Path(profile.repos).expanduser() / "gojira" / "docs" / "github-app-setup.md")
+    found = next((c for c in candidates if c.exists()), None)
+    if found is None:
+        return {"found": False, "perms": [], "steps": [], "doc": ""}
+    text = found.read_text()
+    # the permissions table: | Field | Level | ... rows with a permission name + a level
+    perms: list[tuple[str, str]] = []
+    for m in re.finditer(r"^\|\s*([A-Za-z][A-Za-z &/]+?)\s*\|\s*(Read[^|]*|Read & write|Write[^|]*)\s*\|", text, re.M):
+        name = m.group(1).strip()
+        if name in ("Field", "Permission"):
+            continue
+        perms.append((name, m.group(2).strip()))
+    # the numbered install steps (section 3: Install the App)
+    steps = [s.strip() for s in re.findall(r"^\s*\d+\.\s+(.+)$", text, re.M)][:6]
+    return {"found": True, "perms": perms, "steps": steps, "doc": str(found)}
+
+
 def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
              perform: Callable = _runs.perform, preflight: Callable = _preflight.preflight,
              crane: Callable = CraneCLI, github: Callable = GhCLI,
@@ -184,10 +253,29 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
             except ToolError:
                 gojira_state = "unknown"
                 gojira_note = f"could not read the cluster in {profile.kubeconfig or 'the current context'}"
+        # Slice 4 (criterion 3): the GitHub App is a *pause card*. It stands in for
+        # the Gojira row + the Install Gojira button whenever Gojira is not yet on
+        # the cluster and the env file has no usable App id + pem. Once installed
+        # the card is gone (the gate is passed); an unreadable cluster (unknown)
+        # offers nothing, card or button.
+        app_id, app_pem = _app_identity_of(profile)
+        # The gate passes only once the App is verified (id + pem present, the
+        # path exists, the key parses) AND Gojira is installed. An installed
+        # cluster shows no card (the gate is passed; see note 13: qa renders the
+        # installed state, no card). A cluster Gojira is not on yet shows the card
+        # whenever the App is not usable; an unreadable cluster (unknown) offers
+        # nothing, card or button.
+        show_card = gojira_state != "installed" and gojira_state != "unknown" and not _app_usable(app_id, app_pem)
+        # the org the card links to: the org every app's repo lives in (the part
+        # before the first /), when they agree; else the first one.
+        orgs = {a.repo.split("/")[0] for a in stack.apps} if stack is not None else set()
+        stack_org = next(iter(orgs)) if len(orgs) == 1 else (next(iter(orgs)) if orgs else "")
+        app_setup = _app_setup_doc(profile)
         return page("profile.html", request, profile=profile, stack=stack, error=error, env=environment(stack),
                     runs=list(reversed(runs)), last_check=last_check, check_level=level_of(last_check),
                     busy=runner.active(), gojira_state=gojira_state, gojira_version=gojira_version,
-                    gojira_note=gojira_note)
+                    gojira_note=gojira_note, show_card=show_card, app_id=app_id, app_pem=app_pem,
+                    stack_org=stack_org, app_setup=app_setup)
 
     @app.post("/p/{name}/check")
     def check(name: str, request: Request):
@@ -435,6 +523,58 @@ def make_app(profiles_path: Path, runner: _runs.Runner | None = None,
                 run.add("warn", "Gojira is up; could not read its version")
 
         return _started(request, runner.start(name, "install.gojira", "Gojira (scripts/install.sh)", work))
+
+    @app.post("/p/{name}/app-card")
+    async def app_card_done(name: str, request: Request):
+        """Slice 4 (criterion 3): the pause card's Done button. The operator has
+        typed the App id and the pem path; Done runs the three checks and says
+        which failed: (a)+(b) the pem parses and a JWT signed with it answers GET
+        /app for that id (one call, app_identity), and (c) the App's installation
+        reaches every repo the stack file names (or is installed on all).
+        Nothing is stored but the id and the path, in the install's env file
+        (save_env_file, byte-for-byte lossless for the rest). A failure names the
+        check and stays on the card; a pass writes the two keys and redirects
+        back to the profile, where the card is now gone."""
+        profile = load_profile(name)
+        if profile is None:
+            return notice(request, 404, f"no profile {name!r}", title="No such profile", link="/", link_text="Profiles")
+        if not profile.env_file:
+            return notice(request, 422, "the card stores the id and pem path in the install's env file; "
+                                        "this profile has no env file — set one in Profile settings first",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        form = await request.form()
+        app_id = str(form.get("app_id") or "").strip()
+        pem = str(form.get("app_pem") or "").strip()
+        if not app_id or not pem:
+            return notice(request, 422, "both the App id and the pem path are needed before Done can check",
+                          level="warn", link=f"/p/{name}", link_text=f"Back to {name}")
+        gh = github(env=profile.target().env)
+        # (a)+(b) then (c), in order: the first failure names itself and stays on
+        # the card. Both methods get the id and the pem's PATH and read the key
+        # themselves, used only to sign; its bytes never appear here or on a page.
+        try:
+            gh.app_identity(app_id, pem)
+        except ToolError as exc:
+            return notice(request, 422, f"the App check failed: {exc}", level="warn",
+                          link=f"/p/{name}", link_text=f"Back to {name}")
+        # (c) the installation covers the repos the stack file names
+        stack, error = stack_or_error(profile)
+        repos: list[str] = []
+        if stack is not None:
+            repos = sorted({a.repo for a in stack.apps} | {a.deploy_repo for a in stack.apps if a.deploy_repo})
+        try:
+            gh.installation_covers(app_id, pem, repos)
+        except ToolError as exc:
+            return notice(request, 422, f"the App check failed: {exc}", level="warn",
+                          link=f"/p/{name}", link_text=f"Back to {name}")
+        # pass: store only the id and the path, lossless for the rest of the file
+        try:
+            _envfile.save_env_file(Path(profile.env_file).expanduser(),
+                                   {"GOJIRA_GITHUB_APP_ID": app_id, "GOJIRA_GITHUB_APP_PEM": pem})
+        except ToolError as exc:
+            return notice(request, 422, f"checked, but could not write the env file: {exc}", level="warn",
+                          link=f"/p/{name}", link_text=f"Back to {name}")
+        return RedirectResponse(f"/p/{name}", status_code=303)
 
     def _gojira_version(kubectl, ns: str, gojira=None) -> str:
         """The running version, read where Gojira actually puts it. `GET /healthz`

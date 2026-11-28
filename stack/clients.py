@@ -21,6 +21,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -341,6 +342,13 @@ class GitHubClient(Protocol):
     def last_run(self, repo: str, workflow: str) -> tuple[str, str]: ...
     def login(self) -> str: ...
     def org_access(self, org: str) -> str: ...
+    # Slice 4 (the GitHub App pause card, criterion 3): the card's Done button runs
+    # three checks. (a) the pem parses as a private key and (b) a JWT signed with it
+    # answers GET /app with that id; both in one call so the card names a failure.
+    def app_identity(self, app_id: str, pem_path: str) -> str: ...
+    # (c) the App's installations reach every repo in `repos`: listed by an
+    # installation, or owned by an account the App is installed on for all repos.
+    def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str: ...
 
 
 class GhCLI:
@@ -467,6 +475,111 @@ class GhCLI:
             return "none", ""
         return rows[0]["status"], rows[0].get("conclusion") or ""
 
+    # --- the GitHub App pause card (slice 4, criterion 3) --------------------
+    #
+    # The card's Done button asks two App-level questions that `gh` cannot ask
+    # (gh authenticates as the operator, not as the App). Both are answered with
+    # the App's own private key: an RS256 JWT signed with it authenticates the App
+    # to api.github.com (the same mechanism Gojira uses in gojira/github.py), and
+    # the App's installation access token lists what the App can actually reach.
+    # The pem's bytes never leave these methods: they are read from disk and used
+    # only to sign, never put on a line, in a header body we log, or in the env
+    # file (which stores the *path*, not the key).
+
+    _API = "https://api.github.com"
+
+    def _app_jwt(self, app_id: str, private_key: str) -> str:
+        """A short-lived RS256 JWT signed with the App's private key, the way a
+        GitHub App authenticates (iat back-dated 60s to tolerate clock skew; exp
+        within GitHub's 10-minute cap)."""
+        import jwt
+
+        now = int(time.time())
+        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": app_id},
+                          private_key, algorithm="RS256")
+
+    def app_identity(self, app_id: str, pem_path: str) -> str:
+        """(a)+(b) of the card's checks, in one call, returning "" when both pass
+        and a ToolError naming the failure otherwise. (a) the pem at `pem_path`
+        exists and parses as an RSA private key; (b) a JWT signed with it answers
+        GET /app with exactly `app_id`. `app_id` is the value the card will store.
+        The pem's contents are read here and used only to sign — never logged."""
+        pem = Path(pem_path).expanduser()
+        # (a) parses as a private key
+        try:
+            if not pem.exists():
+                raise ToolError(f"no such pem file: {pem}")
+            key = pem.read_text()
+            # PyJWT's RS256 sign exercises the key; a non-RSA or truncated key
+            # raises here, not at the network call.
+            self._app_jwt(app_id, key)
+        except ToolError:
+            raise
+        except Exception as exc:  # a bad key (not RSA, truncated, wrong type)
+            raise ToolError(f"that pem is not an RSA private key Gojira can sign with: {exc.__class__.__name__}")
+        # (b) a JWT signed with it answers GET /app with that id
+        try:
+            r = httpx.get(f"{self._API}/app", timeout=30,
+                          headers={"Authorization": f"Bearer {self._app_jwt(app_id, key)}",
+                                  "Accept": "application/vnd.github+json"})
+        except httpx.HTTPError as exc:
+            raise ToolError(f"cannot reach api.github.com with that pem: {exc.__class__.__name__}")
+        if r.status_code != 200:
+            raise ToolError(f"api.github.com does not accept that pem as the App (HTTP {r.status_code})")
+        got = str(r.json().get("id"))
+        if got != str(app_id):
+            raise ToolError(f"that pem is GitHub App {got}, not {app_id}: the id and the key do not belong to the same App")
+        return ""
+
+    def installation_covers(self, app_id: str, pem_path: str, repos: list[str]) -> str:
+        """(c) of the card's checks: do the App's installations reach every repo in
+        `repos`? Returns "" when they do — a repo listed by an installation, or owned
+        by an account the App is installed on for all repos — and raises a ToolError
+        naming the repos they cannot reach otherwise. Signs with the key at `pem_path`
+        the way app_identity does (read here, used only to sign); app_identity has
+        already proved that id and key belong together, so this is only the walk."""
+        if not repos:
+            return ""
+        key = Path(pem_path).expanduser().read_text()
+        app_headers = {"Authorization": f"Bearer {self._app_jwt(app_id, key)}",
+                       "Accept": "application/vnd.github+json"}
+        reachable: set[str] = set()
+        all_of: set[str] = set()   # owners every one of whose repos is covered
+        try:
+            installs = httpx.get(f"{self._API}/app/installations", timeout=30, headers=app_headers)
+            if installs.status_code != 200:
+                raise ToolError(f"cannot list this App's installations (HTTP {installs.status_code})")
+            for inst in installs.json():
+                owner = str((inst.get("account") or {}).get("login", "")).lower()
+                if inst.get("repository_selection") == "all" and owner:
+                    all_of.add(owner)
+                    continue
+                tok = httpx.post(f"{self._API}/app/installations/{inst['id']}/access_tokens",
+                                 timeout=30, headers=app_headers)
+                if tok.status_code != 201:
+                    raise ToolError(f"cannot mint a token for the installation on {owner or inst['id']} "
+                                    f"(HTTP {tok.status_code})")
+                tok_headers = {"Authorization": f"Bearer {tok.json()['token']}",
+                               "Accept": "application/vnd.github+json"}
+                page = 1
+                while True:
+                    r = httpx.get(f"{self._API}/installation/repositories",
+                                  params={"per_page": 100, "page": page}, timeout=30, headers=tok_headers)
+                    if r.status_code != 200:
+                        raise ToolError(f"cannot list the repos the installation on {owner} reaches "
+                                        f"(HTTP {r.status_code})")
+                    names = [str(repo["full_name"]).lower() for repo in r.json().get("repositories", [])]
+                    reachable.update(names)
+                    if len(names) < 100:
+                        break
+                    page += 1
+        except httpx.HTTPError as exc:
+            raise ToolError(f"cannot reach api.github.com to check coverage: {exc.__class__.__name__}")
+        missing = sorted(x for x in set(repos)
+                         if x.lower() not in reachable and x.split("/")[0].lower() not in all_of)
+        if missing:
+            raise ToolError("the App is not installed on: " + ", ".join(missing))
+        return ""
 
 # --- crane (registry-to-registry, no daemon) ---------------------------------
 

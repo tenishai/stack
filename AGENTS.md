@@ -24,8 +24,12 @@ once it lands.
 
 ```bash
 uv venv .venv && uv sync --locked   # the lock is the pin; --locked refuses a stale one
-make check                          # pytest + ruff
+make check                          # ruff → mypy → pytest
 ```
+
+Adding or changing a dependency requires `uv lock` in the same commit as the
+`pyproject.toml` change — a stale lock is exactly what `--locked` is there to
+refuse (a `pyjwt[crypto]` added without it would have made this command fail).
 
 ## Rules
 

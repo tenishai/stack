@@ -41,7 +41,44 @@
     {% else %}
     <p class="muted" style="margin:0">Not checked since stack ui started.</p>
     {% endif %}
-    {% if gojira_state == "installed" %}
+    {% if show_card %}
+    {# Slice 4 (criterion 3): the GitHub App is a pause card. It stands in for the
+       Gojira row + the Install Gojira button: nothing is installed until the App
+       the install will act as is verified. Done runs the three checks and stores
+       only the id and the pem path in the install's env file. #}
+    <div class="card app-card">
+      <p class="err" style="margin:0 0 8px">Gojira installs as a <strong>GitHub App</strong> that acts on your repos — clones, pushes the setup branch, opens PRs. It is not installed yet, and this profile's env file has no verified App id + pem. Set it up once; the page will then show the install.</p>
+      <ol class="app-steps" style="margin:0 0 12px; padding-left:20px; font-size:13.5px">
+        <li>Create the App — in your <strong>organization</strong>, not a personal account: <a href="https://github.com/organizations/{{ stack_org }}/settings/apps/new" target="_blank" rel="noopener">github.com/organizations/{{ stack_org }}/settings/apps/new</a></li>
+        <li>Name it <span class="mono">gojira-{{ stack_org }}</span>; set the repository permissions below; <strong>no</strong> account permissions</li>
+        <li>Generate a private key on the App's page; save the <span class="mono">.pem</span> next to your Gojira checkout</li>
+        <li>Install the App → your org → the repos Gojira should deploy</li>
+      </ol>
+      {% if app_setup.found %}
+      <table class="boxed app-perms">
+        <thead><tr><th>Permission</th><th>Level</th></tr></thead>
+        <tbody>
+          {% for name, level in app_setup.perms %}
+          <tr><td>{{ name }}</td><td>{{ level }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted" style="margin:8px 0 12px">The full walkthrough — permissions, why each, the webhook secret, verification — is in <span class="mono">{{ app_setup.doc }}</span>.</p>
+      {% else %}
+      <p class="err" style="margin:8px 0 12px">No <span class="mono">docs/github-app-setup.md</span> in the profile's Gojira checkout (set <span class="mono">gojira_repo</span> in Profile settings); the App's settings live there.</p>
+      {% endif %}
+      <form method="post" action="/p/{{ profile.name }}/app-card" class="app-fields">
+        <div class="knob"><label>GitHub App id</label>
+          <input type="text" name="app_id" value="{{ app_id }}" placeholder="the numeric id at the top of the App's page"></div>
+        <div class="knob"><label>Private key path</label>
+          <input type="text" name="app_pem" value="{{ app_pem }}" placeholder="/path/to/gojira/<app>.pem"></div>
+        <div class="env-foot">
+          <button type="submit" class="caution" {% if busy %}disabled{% endif %}>Done</button>
+          <span class="muted">checks the key signs a token that answers for that id, and that the App is installed on the stack's repos; stores only the id and the path in the env file</span>
+        </div>
+      </form>
+    </div>
+    {% elif gojira_state == "installed" %}
     <p style="margin:0"><span class="badge b-ok">Gojira</span>
       <span class="mono">{{ gojira_version }}</span>
       <span class="muted">is on this cluster</span></p>

@@ -226,10 +226,14 @@ set it: **a browser check runs against a scratch profiles file, never the operat
 ## Test count
 134 passed, ruff clean, mypy clean (mypy is in the gate now).
 
-## Ember's pass (handoff/11): the 10 round, re-proven on a real cluster (5e4e998)
-- **Verdict.** The 09 items are all in — `install-gojira` ran the real `install.sh`
-  to `done` (exit 0, version read back, button relabelled), and `check` on the same
-  cluster is exactly the namespace-only state. Two live defects 5e4e998 still carried.
+## Ember's pass (handoff/11): the 10 round, re-proven (5e4e998)
+- **Verdict.** The 09 items are all in on code and fakes. (Ember 12 corrected the
+  earlier draft of this paragraph: `install-gojira` ran to `done` **in the test** —
+  with the real `_gojira_version` and the real `open_gojira` against the fakes — not
+  on a real cluster; Ember found no Cloud Build and no rolled Deployment on either
+  cluster it can read, so it counted the fake-backed proof and not a live one. The
+  first live press of the button is what note 13 set up: the throwaway `qa` cluster.)
+  Two live defects 5e4e998 still carried.
 - **Item 0 — `namespaces()` returned bytes** (`stack/clients.py`, `KubectlCLI.namespaces`):
   `subprocess.run` without `text=True` → `r.stdout` is bytes, so
   `stack.gojira.namespace not in listed` was *always* true — a running cluster
@@ -314,11 +318,59 @@ set it: **a browser check runs against a scratch profiles file, never the operat
   no version. The four states: empty → button; namespace-only → button; installed →
   version + re-run; unknown → no claim, no button.
 
+## What handoff/01 still has (Ember 12's slice map)
+Criterion 1 (the env-file form, slice 2) is accepted in note 07. Slice 3
+(criteria 2, 4) is accepted in note 12. What is left:
+- **Slice 4 — the GitHub App pause card (criterion 3):** the profile page shows the
+  card instead of the Gojira row + Install Gojira button when the env file has no
+  usable App id/pem; Done runs three checks (pem parses, JWT → GET /app answers for
+  that id, the installation covers the stack's repos) and writes the id + path into
+  the env file. Now pressable live on the throwaway `qa` cluster (note 13): a second
+  profile `qa-noapp` on the same kubeconfig with the two App lines removed renders
+  the card; Done runs the three sentences against the real App once filled in.
+- **Slice 4, Ember's review fix** (this commit): `GhCLI.installation_covers(app_id, pem_path, repos)`
+  takes the credential explicitly and signs with the key behind the path — at 19c63a8 the
+  handler poked a private attribute holding the *path* and the method signed with that
+  string, so a Done on a real App raised `InvalidKeyError` (a 500) after (a)+(b) passed;
+  the fake could not show it. Also: the token mint's status is checked, and an "all repos"
+  installation covers only its own account's repos. `tests/test_app_card.py` drives the
+  real `GhCLI` against a stub GitHub that verifies each App JWT with the pem's public key.
+- **Slice 4 — criterion 3, the GitHub App pause card, done** (`19c63a8`): the profile
+  page shows the card **instead of** the Gojira row + Install Gojira button when the
+  env file has no usable App id + pem — no id, no pem, a pem path that does not
+  exist, or a key that does not parse as RSA (`stack/ui.py::_app_usable`, four local
+  checks; the key is read only to test it, never echoed). Installed cluster → no
+  card (the gate is passed); unreadable cluster (unknown) → nothing, card or
+  button. The card's **settings table is read from the checkout's
+  `docs/github-app-setup.md` at render time** (`stack/ui.py::_app_setup_doc`) — never
+  a copy in our tree (the note: the table changed twice this month); a missing doc
+  or checkout gets one sentence naming the profile field, as the refusals do.
+  **Done** (POST `/p/{name}/app-card`, `stack/ui.py::app_card_done`) runs the three
+  checks in order, naming the first failure: (a)+(b) `GhCLI.app_identity(app_id,
+  pem_path)` (pem parses + a JWT signed with it answers `GET /app` for that id) and
+  (c) `GhCLI.installation_covers(repos)` (the installation reaches every repo the
+  stack names, or is installed on all). On a full pass it stores **only the id and
+  the pem path** in the env file through `envfile.save_env_file` (lossless for the
+  rest) and returns with the card gone. The pem's bytes never appear in a page or
+  run line (`tests/test_app_card.py::test_pem_body_never_on_the_page` greps a known
+  body). 8 new tests, 7 failing at `d603c9f`; 142 pass. `FakeGitHub` grows
+  `app_identity`/`installation_covers`. **Receipts (live, read-only):** a scratch
+  profile at the real `~/src/git/gojira` checkout with the two App lines removed
+  renders the card with the doc's current six-row permission table and the doc
+  link; a working App in the env file renders the installed state, no card.
+- **Slice 5 — criterion 5** (a missing file is a pause card, not a stop), **slice 6 —
+  criterion 7**, then **criterion 10 (the stranger run)** closes handoff/01.
+- Criteria 8 and 9 are checked at every slice.
+
 ## Next
-- **The acceptance is the last door** (criteria 1, 3, 5): the UI drives check +
-  install as one run, the profile page and the one-at-a-time rule, and the env-file
-  form. 11 is the re-proving round of the *install/check* fixes; the acceptance
-  itself is Ember's to run (same four checks as 07). Once it passes, handoff/01 is
-  closed.
-- Slice 4 (if any). Same rules: tests that fail at the parent commit, `make check`
-  green, STATUS row.
+- Slice 5 (the missing-file pause card): the env file that does not exist yet is a
+  pause card on the profile page — the page names the exact path it needs, links the
+  `gojira.env.example` the profile's Gojira checkout ships (when one is under its
+  repos dir), gives the one-line copy command, and offers a **I have the file now**
+  button that re-reads the path and re-validates with `envfile.validate` (it does
+  not save the file). A missing file is a pause the operator clears, never a
+  dead-end refusal. Then slice 6 (criterion 7: a *wrong* file is a pause too, same
+  card shape, one-line fix, same re-read button), then criterion 10 (the stranger
+  run) closes the increment. Same rules as slice 4: tests that fail at the parent
+  commit, `make check` green, STATUS names the slice with file:symbol, receipts or
+  a fake-backed sentence. Criteria 8 and 9 at every slice.
