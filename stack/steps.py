@@ -56,6 +56,7 @@ from stack.clients import (
     GojiraClient,
     KubectlClient,
     ToolError,
+    merge_refused,
 )
 from stack.model import App, Source, Stack
 
@@ -168,7 +169,7 @@ class Installer:
             self.c.gojira.provision(row.id)
             row = self.wait_provisioned(self.c.gojira.app(row.id))
             if row.status == FAILED:
-                raise ToolError(f"{app.name}: provision failed twice; see the app's page on Gojira")
+                raise ToolError(f"{app.name}: provision failed twice; see {self.app_page(row)}")
             self.report.note(f"{app.name}: provisioned on the second try", self.o.say)
         self.apply_configmaps(app)
         self.apply_secrets(app)
@@ -340,17 +341,43 @@ class Installer:
             del data
             self.report.note(f"{app.name}: secret {name} created ({', '.join(keys)})", self.o.say)
 
+    def app_page(self, row: AppRow) -> str:
+        """Where a person reads what Gojira did to this app: its page, when the
+        client knows its address; else just the words."""
+        base = self.c.gojira.url
+        return f"{base}/apps/{row.id}" if base else f"the app's page on Gojira (app {row.id})"
+
+    def try_merge(self, app: App, url: str) -> bool:
+        """Merge the setup PR ourselves (the press is the review). False when
+        GitHub's rules on the repo refused it — a required review or check is a
+        person's merge now, not a stop; anything else from gh is a stop."""
+        try:
+            self.c.github.merge_pr(url)
+        except ToolError as exc:
+            if not merge_refused(exc):
+                raise
+            return False
+        self.report.note(f"{app.name}: merged {url}", self.o.say)
+        return True
+
     def settle_setup_pr(self, app: App, row: AppRow) -> AppRow:
         if row.status != AWAITING_PR:
             return row
         url = row.setup_pr_url
         state = self.c.github.pr_state(url) if url else "unknown"
-        if state == "open" and (app.auto_merge_setup_pr or self.o.merge_setup_prs):
-            self.c.github.merge_pr(url)
-            self.report.note(f"{app.name}: merged {url}", self.o.say)
-            state = "merged"
+        auto = app.auto_merge_setup_pr or self.o.merge_setup_prs
+        if state == "open" and auto:
+            if self.try_merge(app, url):
+                state = "merged"
+            else:
+                # The repo's rules want a review before this PR can merge. Say
+                # exactly that, with the link, and wait: every poll below tries
+                # the merge again, so the approval alone lets the install go on.
+                self.o.say(f"  {app.name}: GitHub's rules on the repo want a review before {url} "
+                           f"can merge; approve it and the install continues")
         if state == "open":
-            self.o.say(f"  {app.name}: waiting for someone to merge {url}")
+            if not auto:
+                self.o.say(f"  {app.name}: waiting for someone to merge {url}")
             self.report.waited_on.append(url)
             deadline = time.monotonic() + self.o.pr_wait_seconds
             while state == "open":
@@ -358,6 +385,8 @@ class Installer:
                     raise ToolError(f"{app.name}: {url} still open after {self.o.pr_wait_seconds:.0f}s")
                 time.sleep(self.o.poll_seconds)
                 state = self.c.github.pr_state(url)
+                if state == "open" and auto and self.try_merge(app, url):
+                    state = "merged"
         if state == "merged":
             row = self.c.gojira.sync(row.id)
             self.report.note(f"{app.name}: setup PR merged, synced ({row.status})", self.o.say)
@@ -508,7 +537,7 @@ class Installer:
         row = self.wait_provisioned(self.c.gojira.app(row.id))
         row = self.settle_setup_pr(app, row)
         if row.status == FAILED:
-            raise ToolError(f"{app.name}: provision failed; see the app's page on Gojira")
+            raise ToolError(f"{app.name}: provision failed; see {self.app_page(row)}")
         # The mark is taken here, after settle_setup_pr: the pin's own
         # contract-check failure (expected) completed before the provision, so
         # it is the mark and the watch's `saw_running` is what tells the
