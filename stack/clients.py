@@ -352,6 +352,7 @@ class GitHubClient(Protocol):
     def create_repo(self, repo: str) -> None: ...
     def push_files(self, repo: str, files: dict[str, str], message: str) -> int: ...
     def read_file(self, repo: str, path: str) -> str: ...
+    def list_dir(self, repo: str, path: str) -> list[str]: ...   # file names under a path, default branch
     def open_pr(self, repo: str, files: dict[str, str], title: str, body: str, branch: str) -> str: ...
     def pr_state(self, pr_url: str) -> str: ...
     def merge_pr(self, pr_url: str) -> None: ...
@@ -445,6 +446,13 @@ class GhCLI:
     def read_file(self, repo, path) -> str:
         out = self._gh("api", f"repos/{repo}/contents/{path}", "--jq", ".content")
         return base64.b64decode(out).decode()
+
+    def list_dir(self, repo, path) -> list[str]:
+        """The files (not directories) under `path` on the default branch. A stranger
+        clones nothing: an upstream's k8s/base is read from here when no clone is
+        under --repos."""
+        out = self._gh("api", f"repos/{repo}/contents/{path}", "--jq", '.[] | select(.type == "file") | .name')
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
     def open_pr(self, repo, files, title, body, branch) -> str:
         """A PR carrying exactly `files` on `branch`, opened or found. A rerun

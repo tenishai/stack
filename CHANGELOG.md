@@ -6,6 +6,20 @@ releases yet; everything is under Unreleased.
 
 ## [Unreleased]
 
+### Added
+
+- **A stack file for a stranger, and the path to it.** `examples/stack.yaml` deploys the
+  stack from published images (litellm-deploy, cabal and kobo on ghcr, pinned by digest)
+  into deploy repos of your own org; `examples/stack/` holds its two config files;
+  `docs/install.md` goes from an empty project through Gojira to the room, naming the
+  two pauses that are yours. The installer reads an upstream's `k8s/base`, `gojira.yaml`
+  and cluster objects from GitHub when no clone is under `--repos`, so nothing is cloned.
+  liminal joins the file when tenishai/liminal publishes an image.
+- **A merge the repo's rules refuse waits for the approval and continues.** The installer
+  says so with the link, retries its own merge on every poll, and goes on when the merge
+  lands; gh failing to reach GitHub is still a stop. A provision that fails twice names
+  the app's page on Gojira.
+
 ### Changed
 
 - **Licence: MIT**, with the licence, NOTICE and community files a public repo

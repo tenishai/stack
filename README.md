@@ -23,15 +23,20 @@ Run it twice and the second run finds everything present and says so.
 ```bash
 git clone https://github.com/tenishai/stack && cd stack
 uv venv .venv && uv sync --locked
-.venv/bin/stack install examples/dogfood.yaml --merge-setup-prs \
-  --repos <dir holding clones of the apps' repos> --cbl <path to cabal's cbl>
+cp -r examples/stack.yaml examples/stack ./   # then replace `acme` with your org and project
+.venv/bin/stack install stack.yaml --merge-setup-prs --cbl <path to cabal's cbl>
 ```
 
-It needs a Gojira already installed and reachable from your current kube
-context, `gh` logged in to the org that owns the deploy repos, `gcloud` on the
-project, and the files the stack file names (a GitHub App key, a LiteLLM master
-key; see "What it needs"). Rerunning is safe: every step reads before it writes.
+[docs/install.md](docs/install.md) is the whole path, from an empty project
+through Gojira to the room, with the pauses that are yours. The stack file
+names published images; nothing is built and nothing is cloned. It needs a
+Gojira already installed and reachable from your current kube context, `gh`
+logged in to your org, `gcloud` on the project, and the one file you bring: the
+GitHub App's private key. Rerunning is safe: every step reads before it writes.
 `stack ui` puts the same steps behind buttons on `localhost:8097`.
+
+`examples/dogfood.yaml` is our own install: the same apps built from their
+source repos on our cluster. Read it for the shape; run the one above.
 
 ## Why
 
@@ -44,7 +49,8 @@ and kobo). This file is that sequence written down.
 
 ## The file
 
-See [examples/dogfood.yaml](examples/dogfood.yaml). Apps are listed in
+See [examples/stack.yaml](examples/stack.yaml) (published images) and
+[examples/dogfood.yaml](examples/dogfood.yaml) (our build-from-source install). Apps are listed in
 dependency order. Every Secret and ConfigMap value is a *source*, never a value:
 
 | Source | Meaning |
@@ -65,9 +71,10 @@ setup PR; otherwise the run prints the link and waits.
 ## Software you did not write
 
 An app can be a published image instead of a repo to build (Gojira's `image:`,
-tenishai/gojira#108). The entry names the upstream repo (cloned under
-`--repos`, for its `k8s/base` and any cluster objects), the image, and a repo
-of your own for the installer to write and connect:
+tenishai/gojira#108). The entry names the upstream repo (for its `k8s/base` and
+any cluster objects, read from a clone under `--repos` when there is one and
+from GitHub when there is not), the image, and a repo of your own for the
+installer to write and connect:
 
 ```yaml
   - name: cabal
@@ -157,8 +164,8 @@ contents. A profile's page shows what its stack file says and three buttons:
   prints, in red. One run at a time, on localhost only; runs live while
   `stack ui` does.
 
-The install flow for a cluster that has no Gojira yet (the GitHub App, the
-Secrets, the pauses where a person acts) is the next increment.
+The start-to-finish install, from an empty project through Gojira to the room,
+is [docs/install.md](docs/install.md).
 
 ## What it needs
 
@@ -170,9 +177,11 @@ Gojira is reached through a port-forward of its Service unless `gojira.url`
 is set. Before touching anything the run names the kubectl context it will
 use and refuses one without Gojira's namespace; `gojira.kube_context` pins
 the context (the dogfood file does), and every kubectl call answers or fails
-within seconds rather than waiting on a cluster that is not there. The dogfood file brings exactly one thing from your machine: the
-GitHub App's private key (`~/tenish-room.pem`); its config files travel with
-it under `examples/dogfood/` and its keys are generated on the first run.
+within seconds rather than waiting on a cluster that is not there. A stack file
+brings exactly one thing from your machine: the GitHub App's private key; its
+config files travel with it (`examples/stack/`, `examples/dogfood/`) and its
+keys are generated on the first run. `--repos` is optional: an upstream's
+`k8s/base` and cluster objects are read from GitHub when no clone is there.
 
 ## What it refuses
 

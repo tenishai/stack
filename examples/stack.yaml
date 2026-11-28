@@ -1,0 +1,82 @@
+# The tenish stack from published images, on a project of yours.
+#
+# Copy this file, replace `acme` with your GitHub organization and `acme-agents`
+# with your GCP project, and read docs/install.md: it goes from an empty project to
+# the room in order. Nothing here is built. Every app is a release image on ghcr,
+# pinned by digest; each gets a small deploy repo of yours (gojira.yaml + the
+# upstream's k8s/base) that the installer creates and Gojira connects. Nothing
+# secret is in this file: the keys are generated into .generated/ (mode 600,
+# gitignored) and the one file you bring is your GitHub App's private key.
+#
+# Order is the dependency order: litellm (the model proxy), cabal (the switchboard,
+# needs litellm's key), then kobo (the room, holds a token minted on that cabal).
+# liminal, the tool gateway, joins this file when tenishai/liminal publishes an
+# image; until then the room runs without it.
+
+gojira:
+  namespace: gojira
+  # Pin the context: your current kubectl context can be any cluster. This is the
+  # name `gcloud container clusters get-credentials` writes for the cluster below.
+  kube_context: gke_acme-agents_us-central1_gojira-sandbox
+
+cluster:
+  name: gojira-sandbox         # the name you registered the cluster under in Gojira (install.md step 1)
+  gcp_project: acme-agents
+  location: us-central1
+
+apps:
+  - name: litellm
+    repo: tenishai/litellm-deploy                 # the upstream: its k8s/base travels into the deploy repo
+    # Pin by digest from the release notes (github.com/tenishai/litellm-deploy/releases):
+    #   image: ghcr.io/tenishai/litellm-deploy:v0.1.0@sha256:…
+    image: ghcr.io/tenishai/litellm-deploy:v0.1.0
+    source_image: ghcr.io/tenishai/litellm-deploy   # where releases are published; the UI's release picker reads it
+    deploy_repo: acme/infra-litellm-deploy          # created if missing; gojira.yaml + k8s/base, nothing else
+    workload_class: web
+    contract:
+      identity: { gcp_roles: [roles/aiplatform.user] }   # the proxy calls Vertex as its own account
+      env: { VERTEX_PROJECT: acme-agents, VERTEX_LOCATION: us-central1 }
+    secrets:
+      litellm-secrets:
+        LITELLM_MASTER_KEY: generate:32:litellm-master-key   # one value, shared with cabal below
+
+  - name: cabal
+    repo: tenishai/cabal
+    image: ghcr.io/tenishai/cabal:v0.5.1@sha256:d20dfd4ad66be03149fea7352cb2e1baf82cdb251d9f18b0d55df903b2366a74
+    source_image: ghcr.io/tenishai/cabal
+    deploy_repo: acme/infra-cabal-deploy
+    bootstrap: cabal           # catch the bootstrap code from its log, log in, mint the tokens below
+    configmaps:
+      cabal-config:
+        identity.toml: file:stack/cabal-identity.toml
+    secrets:
+      cabal-secrets:
+        CABAL_MASTER_KEY: generate:32
+        LITELLM_MASTER_KEY: generate:32:litellm-master-key
+
+  - name: kobo
+    repo: tenishai/kobo
+    image: ghcr.io/tenishai/kobo:v0.3.86@sha256:e8068497ae55cb816beb4aa8ab6f350f45c72454c8ca3043462ba90f43de6908
+    source_image: ghcr.io/tenishai/kobo
+    deploy_repo: acme/infra-kobo-deploy
+    cluster_objects: [k8s/cluster/rbac.yaml]     # the ClusterRole kobo-room, which Gojira binds via cluster_roles
+    contract:
+      # The room makes agents: it creates their service accounts and grants them
+      # roles, pushes their images, deploys through Gojira and keeps catalogs in
+      # buckets. Each role must be on the install's GOJIRA_GRANTABLE_ROLES
+      # (install.md step 1); Gojira creates the account kobo@acme-agents with them.
+      identity:
+        gcp_roles:
+          - roles/aiplatform.user
+          - roles/artifactregistry.reader
+          - roles/container.developer
+          - roles/iam.serviceAccountAdmin
+          - roles/resourcemanager.projectIamAdmin
+          - roles/storage.admin
+    secrets:
+      kobo-github:
+        private-key.pem: file:~/.config/stack/github-app.pem     # the one file you bring (install.md step 2)
+      kobo-config:
+        config.yaml: template:stack/kobo-config.template.yaml
+      kobo-cabal:
+        CABAL_OPERATOR_TOKEN: cabal-token:service:kobo:operator

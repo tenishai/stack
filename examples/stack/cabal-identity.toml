@@ -1,0 +1,64 @@
+[cabal]
+host = "0.0.0.0"
+port = 7400
+data_dir = "/data"
+operator_id = "operator"   # the name cabal gives the first operator login
+
+[litellm]
+api_base = "http://litellm.litellm.svc.cluster.local"
+api_key_env = "LITELLM_MASTER_KEY"
+
+[liminal]
+url = "http://liminal.liminal.svc.cluster.local"
+token_ttl_seconds = 3600
+jwt_aud = "liminal"
+
+[techne]
+db_path = "/data/techne.db"
+use_vectors = false
+
+[personas.archivist]
+description = "Memory and search"
+role = "singleton"
+safety_tier = "moderate"
+model_override = "openai/gemini-2.5-flash"
+
+[personas.archivist.mcp]
+enabled = true
+allowed_handlers = ["memory", "scratchpad"]
+
+[personas.architect]
+description = "Patterns and design"
+role = "singleton"
+safety_tier = "moderate"
+model_override = "openai/gemini-2.5-pro"
+
+[personas.librarian]
+description = "External-documentation lookup"
+role = "singleton"
+safety_tier = "moderate"
+model_override = "openai/gemini-2.5-flash"
+
+[personas.mason]
+description = "Engineering / SRE primus"
+role = "primus"
+safety_tier = "strict"
+model_override = "openai/gemini-2.5-pro"
+
+[personas.mason.subordinates.implementer]
+model = "openai/gemini-2.5-flash"
+max_tokens = 16384
+
+[personas.mason.subordinates.reviewer]
+model = "openai/gemini-2.5-pro"
+max_tokens = 8192
+
+[personas.wright]
+description = "Senior software engineer — general-engineering primus"
+role = "primus"
+safety_tier = "strict"
+model_override = "openai/gemini-2.5-pro"
+
+[personas.wright.subordinates.implementer]
+model = "openai/gemini-2.5-flash"
+max_tokens = 16384

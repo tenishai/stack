@@ -1,0 +1,35 @@
+# kobo's config for your install (namespace kobo), mounted from the Secret
+# kobo-config at /config/config.yaml. Replace `acme` / `acme-agents` as in
+# stack.yaml. `{gojira_token}` is filled when the Secret is created, from
+# Gojira's own API token; leave it. Every key is described in kobo's
+# api/config.example.yaml.
+github_org: acme
+org_repo: acme/kobo-config          # the org's config repo (org.yaml); kobo's bootstrap creates it (install.md step 5)
+# The runtime every agent runs on. Every tenishai/daedalus release from v0.9.1 publishes
+# ghcr.io/tenishai/daedalus-runtime:vX.Y.Z (github.com/tenishai/daedalus/releases): pin a tag.
+runtime_image: ghcr.io/tenishai/daedalus-runtime:v0.9.1
+gojira_url: http://gojira.gojira.svc.cluster.local
+gojira_token: "{gojira_token}"
+gojira_cluster: gojira-sandbox       # the cluster name in stack.yaml
+gcp_project: acme-agents
+vertex_project: acme-agents
+vertex_location: us-central1
+model_group: ""                      # empty: the room grants roles/aiplatform.user to each agent directly
+models:
+  - id: vertex_ai/gemini-2.5-flash
+    label: Gemini 2.5 Flash
+  - id: vertex_ai/gemini-2.5-pro
+    label: Gemini 2.5 Pro
+skills_repo: kobo-skills             # created by kobo's bootstrap, in github_org
+skills_bucket: acme-agents-kobo-skills        # bucket names are global: yours must be unused
+personas_bucket: acme-agents-kobo-personas
+api_base_url: http://kobo.kobo.svc.cluster.local
+workdir: /data/work
+db_url: sqlite:////data/kobo.db
+ui_dist: /srv/ui
+iap_audience: ""                     # empty: no sign-in proxy; reach the room through a port-forward
+# The same GitHub App Gojira uses (install.md step 2): its id, the id of its
+# installation on your org, and where the Secret kobo-github mounts the key.
+github_app_id: "<app id>"
+github_app_installation_id: "<installation id>"
+github_app_private_key_path: /secrets/github/private-key.pem
